@@ -1,56 +1,70 @@
 import { Button } from "@/components/ui/button";
-import { ArrowRight, Shield, Users, Leaf } from "lucide-react";
+import { ArrowRight, Shield, Users, Leaf, Truck, Wallet, ShoppingBag, Sparkles, Star } from "lucide-react";
 import { Link } from "react-router-dom";
+import Navigation from "@/components/Navigation";
 
 const Index = () => {
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-secondary/20">
-      {/* Navigation */}
-      <nav className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Leaf className="h-8 w-8 text-primary" />
-            <span className="text-2xl font-bold text-foreground">FreshPledge</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <Link to="/login">
-              <Button variant="ghost">Login</Button>
-            </Link>
-            <Link to="/register/consumer">
-              <Button>Get Started</Button>
-            </Link>
-          </div>
-        </div>
-      </nav>
+      <Navigation />
 
       {/* Hero Section */}
-      <section className="container mx-auto px-4 py-20 md:py-32">
-        <div className="max-w-4xl mx-auto text-center space-y-8">
-          <h1 className="text-4xl md:text-6xl font-bold leading-tight">
-            Farm-Fresh Dairy,{" "}
-            <span className="text-primary">Direct from Source</span>
-          </h1>
-          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Connect directly with dairy farmers through blockchain technology. 
-            Authentic products, fair prices, complete transparency.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Link to="/register/consumer">
-              <Button size="lg" className="gap-2">
-                Shop Fresh Dairy <ArrowRight className="h-4 w-4" />
-              </Button>
-            </Link>
-            <Link to="/register/farmer">
-              <Button size="lg" variant="outline">
-                Become a Farmer Partner
-              </Button>
-            </Link>
+      <section className="relative overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,theme(colors.primary/10),transparent_60%)]" />
+        <div className="container mx-auto px-4 py-20 md:py-28">
+          <div className="max-w-5xl mx-auto text-center space-y-8">
+            <span className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs md:text-sm text-muted-foreground bg-background/60 backdrop-blur">
+              <Sparkles className="h-4 w-4 text-primary" />
+              Blockchain-verified farm-to-table marketplace
+            </span>
+            <h1 className="text-4xl md:text-6xl font-bold leading-tight">
+              Farm-Fresh Dairy,{" "}
+              <span className="text-primary">Direct from Source</span>
+            </h1>
+            <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto">
+              Shop authentic dairy, support local farmers, and track every order on-chain.
+              Transparent, fair, and unbelievably fresh.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              <Link to="/products">
+                <Button size="lg" className="gap-2">
+                  Shop Fresh Dairy <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
+              <Link to="/register/farmer">
+                <Button size="lg" variant="outline" className="gap-2">
+                  Become a Farmer Partner
+                </Button>
+              </Link>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 pt-10">
+              <div className="rounded-xl border bg-card p-4">
+                <p className="text-2xl font-bold">10k+</p>
+                <p className="text-xs text-muted-foreground">Orders fulfilled</p>
+              </div>
+              <div className="rounded-xl border bg-card p-4">
+                <p className="text-2xl font-bold">100%</p>
+                <p className="text-xs text-muted-foreground">On-chain verified</p>
+              </div>
+              <div className="rounded-xl border bg-card p-4">
+                <p className="text-2xl font-bold">500+</p>
+                <p className="text-xs text-muted-foreground">Happy farmers</p>
+              </div>
+              <div className="rounded-xl border bg-card p-4">
+                <p className="text-2xl font-bold">4.9</p>
+                <p className="text-xs text-muted-foreground">Average rating</p>
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
       {/* Features */}
       <section className="container mx-auto px-4 py-20">
+        <div className="text-center mb-12 space-y-2">
+          <h2 className="text-2xl md:text-3xl font-bold">Why FreshPledge?</h2>
+          <p className="text-muted-foreground">Trust, transparency, and taste — built into every order.</p>
+        </div>
         <div className="grid md:grid-cols-3 gap-8">
           <div className="bg-card rounded-lg p-8 shadow-[var(--shadow-soft)] border">
             <div className="bg-primary/10 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
@@ -87,6 +101,60 @@ const Index = () => {
         </div>
       </section>
 
+      {/* How it works */}
+      <section className="container mx-auto px-4 py-16">
+        <div className="rounded-2xl border bg-card p-6 md:p-10">
+          <div className="grid md:grid-cols-3 gap-8 items-start">
+            <div className="space-y-3">
+              <div className="h-10 w-10 rounded-md bg-primary/10 flex items-center justify-center">
+                <ShoppingBag className="h-5 w-5 text-primary" />
+              </div>
+              <h3 className="text-lg font-semibold">1. Choose products</h3>
+              <p className="text-sm text-muted-foreground">Browse farmer listings and add fresh dairy to your cart.</p>
+            </div>
+            <div className="space-y-3">
+              <div className="h-10 w-10 rounded-md bg-primary/10 flex items-center justify-center">
+                <Wallet className="h-5 w-5 text-primary" />
+              </div>
+              <h3 className="text-lg font-semibold">2. Pay securely</h3>
+              <p className="text-sm text-muted-foreground">Pay with popular wallets; settlements are mirrored on-chain.</p>
+            </div>
+            <div className="space-y-3">
+              <div className="h-10 w-10 rounded-md bg-primary/10 flex items-center justify-center">
+                <Truck className="h-5 w-5 text-primary" />
+              </div>
+              <h3 className="text-lg font-semibold">3. Track delivery</h3>
+              <p className="text-sm text-muted-foreground">Follow your order from farm to doorstep with full traceability.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Testimonials */}
+      <section className="container mx-auto px-4 py-16">
+        <div className="text-center mb-10">
+          <h2 className="text-2xl md:text-3xl font-bold">Loved by consumers and farmers</h2>
+        </div>
+        <div className="grid md:grid-cols-3 gap-6">
+          {[1,2,3].map((i) => (
+            <div key={i} className="rounded-xl border bg-card p-6 space-y-4">
+              <div className="flex gap-1 text-amber-500">
+                {Array.from({ length: 5 }).map((_, idx) => (
+                  <Star key={idx} className="h-4 w-4 fill-current" />
+                ))}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                “Freshest milk I’ve had delivered. Love the transparency — I can see the farm and batch on-chain.”
+              </p>
+              <div className="text-sm">
+                <span className="font-medium">Ritika S.</span>
+                <span className="text-muted-foreground"> • Mumbai</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* CTA Section */}
       <section className="container mx-auto px-4 py-20">
         <div className="bg-gradient-to-r from-primary to-primary-dark text-primary-foreground rounded-2xl p-12 text-center">
@@ -96,7 +164,7 @@ const Index = () => {
           <p className="text-xl mb-8 opacity-90">
             Join thousands of consumers and farmers in the revolution
           </p>
-          <Link to="/register/consumer">
+          <Link to="/products">
             <Button size="lg" variant="secondary">
               Start Shopping Now
             </Button>
