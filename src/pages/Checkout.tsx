@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { usePayment } from "@/hooks/usePayment";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import Navigation from "@/components/Navigation";
 import { 
   ArrowLeft, 
@@ -12,9 +13,13 @@ import {
   Loader2, 
   CheckCircle2,
   ShoppingBag,
-  Wallet
+  Wallet,
+  AlertCircle,
+  Download,
+  CheckCircle
 } from "lucide-react";
 import { toast } from "sonner";
+import { ethers } from "ethers";
 
 interface Product {
   id: string;
@@ -30,18 +35,128 @@ const Checkout = () => {
   const { processPayment, isProcessing, paymentMethods } = usePayment();
   
   // Get product from location state or use demo product
-  const product: Product = location.state?.product || {
-    id: "demo-1",
-    name: "Fresh Organic Milk (1L)",
-    price: 50,
-    quantity: 1,
-  };
+  const rawProduct = location.state?.product;
+  const product: Product = rawProduct
+    ? {
+        id: rawProduct.id || "unknown",
+        name: rawProduct.name || "Unknown Product",
+        price: typeof rawProduct.price === "number" && !isNaN(rawProduct.price) && rawProduct.price > 0 
+          ? rawProduct.price 
+          : 0,
+        quantity: typeof rawProduct.quantity === "number" && !isNaN(rawProduct.quantity) && rawProduct.quantity > 0
+          ? rawProduct.quantity
+          : 1,
+        image: rawProduct.image,
+      }
+    : {
+        id: "demo-1",
+        name: "Fresh Organic Milk (1L)",
+        price: 50,
+        quantity: 1,
+      };
 
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<"gpay" | "phonepe" | "blockchain" | null>(null);
   const [paymentCompleted, setPaymentCompleted] = useState(false);
   const [paymentResult, setPaymentResult] = useState<{ paymentId?: string; orderId?: string; txHash?: string } | null>(null);
+  const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(false);
+  const [isWalletConnected, setIsWalletConnected] = useState(false);
+  const [isConnectingWallet, setIsConnectingWallet] = useState(false);
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
 
-  const totalAmount = product.price * product.quantity;
+  // Check if MetaMask is installed and if wallet is connected
+  useEffect(() => {
+    const checkMetaMask = async () => {
+      const installed = typeof window !== "undefined" && 
+                       typeof window.ethereum !== "undefined" &&
+                       (window.ethereum.isMetaMask || window.ethereum.providers?.some((p: any) => p.isMetaMask));
+      setIsMetaMaskInstalled(installed);
+      
+      // Check if already connected
+      if (installed && window.ethereum) {
+        try {
+          const provider = new ethers.BrowserProvider(window.ethereum);
+          const accounts = await provider.listAccounts();
+          if (accounts.length > 0) {
+            setIsWalletConnected(true);
+            setWalletAddress(accounts[0].address);
+          }
+        } catch (error) {
+          // Not connected yet
+          setIsWalletConnected(false);
+          setWalletAddress(null);
+        }
+      }
+    };
+    
+    checkMetaMask();
+    
+    // Check periodically in case MetaMask is installed after page load
+    const interval = setInterval(checkMetaMask, 1000);
+    
+    // Listen for account changes
+    if (window.ethereum) {
+      const handleAccountsChanged = (accounts: string[]) => {
+        if (accounts.length > 0) {
+          setIsWalletConnected(true);
+          setWalletAddress(accounts[0]);
+        } else {
+          setIsWalletConnected(false);
+          setWalletAddress(null);
+        }
+      };
+      
+      window.ethereum.on("accountsChanged", handleAccountsChanged);
+      
+      return () => {
+        clearInterval(interval);
+        window.ethereum?.removeListener("accountsChanged", handleAccountsChanged);
+      };
+    }
+    
+    return () => clearInterval(interval);
+  }, []);
+  
+  // Connect wallet function
+  const connectWallet = async () => {
+    if (!isMetaMaskInstalled) {
+      toast.error("MetaMask is not installed. Please install MetaMask to continue.");
+      window.open("https://metamask.io/download/", "_blank");
+      return;
+    }
+    
+    setIsConnectingWallet(true);
+    try {
+      if (!window.ethereum) {
+        throw new Error("MetaMask not found");
+      }
+      
+      // Request account access
+      await window.ethereum.request({ method: "eth_requestAccounts" });
+      
+      // Get the connected account
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      const address = await signer.getAddress();
+      
+      setIsWalletConnected(true);
+      setWalletAddress(address);
+      toast.success(`Wallet connected: ${address.slice(0, 6)}...${address.slice(-4)}`);
+    } catch (error: any) {
+      console.error("Error connecting wallet:", error);
+      if (error.code === 4001) {
+        toast.error("Please connect your MetaMask wallet to continue.");
+      } else {
+        toast.error("Failed to connect wallet. Please try again.");
+      }
+      setIsWalletConnected(false);
+      setWalletAddress(null);
+    } finally {
+      setIsConnectingWallet(false);
+    }
+  };
+
+  // Ensure totalAmount is always a valid number
+  const totalAmount = (product.price || 0) * (product.quantity || 1);
 
   const handlePayment = async () => {
     if (!selectedPaymentMethod) {
@@ -167,13 +282,13 @@ const Checkout = () => {
                   <p className="font-medium">{product.name}</p>
                   <p className="text-sm text-muted-foreground">Quantity: {product.quantity}</p>
                 </div>
-                <p className="font-semibold">₹{product.price.toFixed(2)}</p>
+                <p className="font-semibold">₹{(product.price || 0).toFixed(2)}</p>
               </div>
               <Separator />
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Subtotal</span>
-                  <span>₹{totalAmount.toFixed(2)}</span>
+                  <span>₹{(totalAmount || 0).toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Processing Fee</span>
@@ -182,7 +297,7 @@ const Checkout = () => {
                 <Separator />
                 <div className="flex justify-between text-lg font-bold">
                   <span>Total</span>
-                  <span>₹{totalAmount.toFixed(2)}</span>
+                  <span>₹{(totalAmount || 0).toFixed(2)}</span>
                 </div>
               </div>
               <div className="mt-4 p-3 bg-muted rounded-lg">
@@ -240,9 +355,88 @@ const Checkout = () => {
 
               <Separator />
 
+              {/* MetaMask Warning for Blockchain Payment */}
+              {selectedPaymentMethod === "blockchain" && !isMetaMaskInstalled && (
+                <Alert className="border-amber-500/50 bg-amber-50 dark:bg-amber-950/20">
+                  <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  <AlertTitle className="text-amber-900 dark:text-amber-100">
+                    MetaMask Required
+                  </AlertTitle>
+                  <AlertDescription className="text-amber-800 dark:text-amber-200">
+                    <p className="mb-2">
+                      To use blockchain payments, you need to install the MetaMask browser extension.
+                    </p>
+                    <Button
+                      onClick={() => window.open("https://metamask.io/download/", "_blank")}
+                      size="sm"
+                      className="bg-amber-600 hover:bg-amber-700 text-white"
+                    >
+                      <Download className="mr-2 h-3 w-3" />
+                      Install MetaMask
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {/* Wallet Connection Status for Blockchain Payment */}
+              {selectedPaymentMethod === "blockchain" && isMetaMaskInstalled && (
+                <>
+                  {!isWalletConnected ? (
+                    <Alert className="border-blue-500/50 bg-blue-50 dark:bg-blue-950/20">
+                      <Wallet className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                      <AlertTitle className="text-blue-900 dark:text-blue-100">
+                        Connect Your Wallet
+                      </AlertTitle>
+                      <AlertDescription className="text-blue-800 dark:text-blue-200">
+                        <p className="mb-3">
+                          Please connect your MetaMask wallet to proceed with blockchain payment.
+                        </p>
+                        <Button
+                          onClick={connectWallet}
+                          disabled={isConnectingWallet}
+                          size="sm"
+                          className="bg-blue-600 hover:bg-blue-700 text-white"
+                        >
+                          {isConnectingWallet ? (
+                            <>
+                              <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                              Connecting...
+                            </>
+                          ) : (
+                            <>
+                              <Wallet className="mr-2 h-3 w-3" />
+                              Connect Wallet
+                            </>
+                          )}
+                        </Button>
+                      </AlertDescription>
+                    </Alert>
+                  ) : (
+                    <Alert className="border-green-500/50 bg-green-50 dark:bg-green-950/20">
+                      <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
+                      <AlertTitle className="text-green-900 dark:text-green-100">
+                        Wallet Connected
+                      </AlertTitle>
+                      <AlertDescription className="text-green-800 dark:text-green-200">
+                        <p className="text-sm">
+                          {walletAddress && `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`}
+                        </p>
+                        <p className="text-xs mt-1">
+                          Make sure you're on the Sepolia test network for testing.
+                        </p>
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </>
+              )}
+
               <Button
                 onClick={handlePayment}
-                disabled={!selectedPaymentMethod || isProcessing}
+                disabled={
+                  !selectedPaymentMethod || 
+                  isProcessing || 
+                  (selectedPaymentMethod === "blockchain" && (!isMetaMaskInstalled || !isWalletConnected))
+                }
                 className="w-full"
                 size="lg"
               >
@@ -253,7 +447,7 @@ const Checkout = () => {
                   </>
                 ) : (
                   <>
-                    Pay ₹{totalAmount.toFixed(2)}
+                    Pay ₹{(totalAmount || 0).toFixed(2)}
                   </>
                 )}
               </Button>
@@ -270,4 +464,21 @@ const Checkout = () => {
 };
 
 export default Checkout;
+
+// Extend Window interface for TypeScript
+declare global {
+  interface Window {
+    ethereum?: {
+      isMetaMask?: boolean;
+      providers?: Array<{
+        isMetaMask?: boolean;
+        request: (args: { method: string; params?: any[] }) => Promise<any>;
+      }>;
+      request: (args: { method: string; params?: any[] }) => Promise<any>;
+      on: (event: string, callback: (...args: any[]) => void) => void;
+      removeListener: (event: string, callback: (...args: any[]) => void) => void;
+      selectedAddress?: string;
+    };
+  }
+}
 

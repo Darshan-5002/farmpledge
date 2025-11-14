@@ -4,7 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import Navigation from "@/components/Navigation";
+import { useAuth } from "@/contexts/AuthContext";
+import { toast } from "sonner";
 import { 
   Search, 
   ShoppingCart, 
@@ -14,7 +17,8 @@ import {
   Calendar,
   ChevronLeft,
   ChevronRight,
-  X
+  X,
+  LogIn
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore";
@@ -35,6 +39,7 @@ interface Product {
 
 const Products = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -63,11 +68,12 @@ const Products = () => {
           (snapshot) => {
             const items: Product[] = snapshot.docs.map((d) => {
               const data = d.data() as any;
+              const priceValue = Number(data.price);
               return {
                 id: d.id,
                 name: data.name ?? "",
                 description: data.description ?? "",
-                price: Number(data.price) ?? 0,
+                price: isNaN(priceValue) || priceValue <= 0 ? 0 : priceValue,
                 category: data.category ?? "Dairy",
                 inStock: Boolean(data.inStock),
                 image: data.image ?? undefined,
@@ -90,11 +96,12 @@ const Products = () => {
                   const items: Product[] = snapshot.docs
                     .map((d) => {
                       const data = d.data() as any;
+                      const priceValue = Number(data.price);
                       return {
                         id: d.id,
                         name: data.name ?? "",
                         description: data.description ?? "",
-                        price: Number(data.price) ?? 0,
+                        price: isNaN(priceValue) || priceValue <= 0 ? 0 : priceValue,
                         category: data.category ?? "Dairy",
                         inStock: Boolean(data.inStock),
                         image: data.image ?? undefined,
@@ -144,6 +151,18 @@ const Products = () => {
   );
 
   const handleBuyNow = (product: Product) => {
+    // Check if user is logged in
+    if (!user) {
+      toast.error("Please login to purchase products", {
+        description: "You need to be logged in to make a purchase.",
+        action: {
+          label: "Login",
+          onClick: () => navigate("/login"),
+        },
+      });
+      return;
+    }
+
     navigate("/checkout", {
       state: { product },
     });
@@ -343,22 +362,44 @@ const Products = () => {
                         <p className="text-sm text-muted-foreground">Price</p>
                         <p className="text-2xl font-bold flex items-center gap-1">
                           <IndianRupee className="h-5 w-5" />
-                          {product.price}
+                          {(product.price || 0).toFixed(2)}
                         </p>
                       </div>
                     </div>
-                    <Button
-                      onClick={() => handleBuyNow({
-                        ...product,
-                        ownerId: product.ownerId ?? undefined,
-                        ownerName: product.ownerName ?? undefined,
-                      })}
-                      className="w-full"
-                      disabled={!product.inStock}
-                    >
-                      <ShoppingCart className="mr-2 h-4 w-4" />
-                      {product.inStock ? "Buy Now" : "Out of Stock"}
-                    </Button>
+                    <TooltipProvider>
+                      <Tooltip delayDuration={200}>
+                        <TooltipTrigger asChild>
+                          <span className="w-full inline-block">
+                            <Button
+                              onClick={() => handleBuyNow({
+                                ...product,
+                                ownerId: product.ownerId ?? undefined,
+                                ownerName: product.ownerName ?? undefined,
+                              })}
+                              className="w-full"
+                              disabled={!product.inStock || !user}
+                            >
+                              {!user ? (
+                                <>
+                                  <LogIn className="mr-2 h-4 w-4" />
+                                  Login to Buy
+                                </>
+                              ) : (
+                                <>
+                                  <ShoppingCart className="mr-2 h-4 w-4" />
+                                  {product.inStock ? "Buy Now" : "Out of Stock"}
+                                </>
+                              )}
+                            </Button>
+                          </span>
+                        </TooltipTrigger>
+                        {!user && (
+                          <TooltipContent>
+                            <p>Please login to purchase this product</p>
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
                 </CardContent>
               </Card>

@@ -122,12 +122,50 @@ contract FreshPledgeEscrow {
     }
 
     /**
+     * @notice Customer confirms delivery and automatically releases funds to farmer (one transaction)
+     * @param orderHash Hash of the order
+     */
+    function confirmDeliveryAndRelease(bytes32 orderHash) external {
+        Order storage order = orders[orderHash];
+        if (order.status != OrderStatus.Created) revert InvalidState(OrderStatus.Created, order.status);
+        if (msg.sender != order.customer) revert Unauthorized();
+
+        // Mark as delivered
+        order.status = OrderStatus.Delivered;
+        emit OrderDelivered(orderHash, order.orderId);
+
+        // Immediately release funds to farmer
+        order.status = OrderStatus.Released;
+        
+        uint256 fee = (order.amount * feeBasisPoints) / 10_000;
+        uint256 payout = order.amount - fee;
+
+        // Transfer to farmer
+        (bool successFarmer, ) = order.farmer.call{value: payout}("");
+        if (!successFarmer) revert TransferFailed();
+
+        // Transfer fee to admin
+        if (fee > 0) {
+            (bool successFee, ) = admin.call{value: fee}("");
+            if (!successFee) revert TransferFailed();
+        }
+
+        emit OrderReleased(orderHash, order.orderId, order.farmer, payout, fee);
+    }
+
+    /**
      * @notice Release funds to farmer after delivery confirmation
+     * Can be called by customer (who confirmed delivery) or farmer
      * @param orderHash Hash of the order
      */
     function releaseOrder(bytes32 orderHash) external {
         Order storage order = orders[orderHash];
         if (order.status != OrderStatus.Delivered) revert InvalidState(OrderStatus.Delivered, order.status);
+        
+        // Only customer (who confirmed) or farmer can release
+        if (msg.sender != order.customer && msg.sender != order.farmer) {
+            revert Unauthorized();
+        }
 
         order.status = OrderStatus.Released;
         
@@ -215,6 +253,21 @@ contract FreshPledgeEscrow {
         uint256 timestamp
     ) external pure returns (bytes32) {
         return keccak256(abi.encodePacked(orderId, customer, timestamp));
+    }
+
+    /**
+     * @notice Get total balance held in escrow (for all orders)
+     * @return Total amount of ETH held in escrow
+     */
+    function getEscrowBalance() external view returns (uint256) {
+        return address(this).balance;
+    }
+
+    /**
+     * @notice Receive function to accept ETH payments
+     */
+    receive() external payable {
+        // Contract can receive ETH for orders
     }
 }
 

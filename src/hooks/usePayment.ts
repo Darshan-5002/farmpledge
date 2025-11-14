@@ -18,7 +18,50 @@ interface PaymentResult {
   error?: string;
 }
 
-const ADMIN_WALLET_ADDRESS = import.meta.env.VITE_ADMIN_WALLET_ADDRESS || "0x0000000000000000000000000000000000000000";
+// Get admin wallet address from environment variable
+// If not set, use zero address as fallback (will show error if used)
+const getAdminWalletAddress = (): string => {
+  const envValue = import.meta.env.VITE_ADMIN_WALLET_ADDRESS;
+  
+  // Debug logging
+  console.log("VITE_ADMIN_WALLET_ADDRESS from env:", envValue);
+  
+  // If not set, return zero address
+  if (!envValue) {
+    console.warn("VITE_ADMIN_WALLET_ADDRESS is not set in environment variables");
+    return "0x0000000000000000000000000000000000000000";
+  }
+  
+  // Trim whitespace
+  const trimmedValue = envValue.trim();
+  
+  // Check if it's a placeholder value
+  if (
+    trimmedValue.includes("YourAdmin") || 
+    trimmedValue.includes("YourWallet") ||
+    trimmedValue.includes("placeholder") ||
+    trimmedValue === "0xYourAdminWallet" ||
+    trimmedValue === "0x0000000000000000000000000000000000000000"
+  ) {
+    console.warn("VITE_ADMIN_WALLET_ADDRESS contains placeholder or zero address. Please set a real wallet address in .env.local");
+    return "0x0000000000000000000000000000000000000000";
+  }
+  
+  // Validate format
+  if (!trimmedValue.startsWith("0x")) {
+    console.error("VITE_ADMIN_WALLET_ADDRESS must start with 0x. Current value:", trimmedValue);
+    return "0x0000000000000000000000000000000000000000";
+  }
+  
+  if (!/^0x[a-fA-F0-9]{40}$/.test(trimmedValue)) {
+    console.error("VITE_ADMIN_WALLET_ADDRESS has invalid format. Must be 42 characters (0x + 40 hex chars). Current value:", trimmedValue, "Length:", trimmedValue.length);
+    return "0x0000000000000000000000000000000000000000";
+  }
+  
+  return trimmedValue;
+};
+
+const ADMIN_WALLET_ADDRESS = getAdminWalletAddress();
 const RAZORPAY_KEY = import.meta.env.VITE_RAZORPAY_KEY_ID;
 
 // Load Razorpay script dynamically
@@ -254,10 +297,26 @@ export const usePayment = () => {
         ? await getFarmerWalletAddress(farmerId) 
         : ADMIN_WALLET_ADDRESS;
 
-      if (farmerWalletAddress === "0x0000000000000000000000000000000000000000") {
+      // Debug logging
+      console.log("Farmer wallet address resolved:", farmerWalletAddress);
+      console.log("ADMIN_WALLET_ADDRESS:", ADMIN_WALLET_ADDRESS);
+
+      // Validate wallet addresses
+      if (farmerWalletAddress === "0x0000000000000000000000000000000000000000" || !farmerWalletAddress) {
+        // User-friendly error message for customers
+        console.error("Farmer wallet address not configured. ADMIN_WALLET_ADDRESS:", ADMIN_WALLET_ADDRESS);
         return {
           success: false,
-          error: "Farmer wallet address not set. Please contact support.",
+          error: "Blockchain payment is currently unavailable. Please try Google Pay or PhonePe, or contact support for assistance.",
+        };
+      }
+      
+      // Validate address format
+      if (!/^0x[a-fA-F0-9]{40}$/.test(farmerWalletAddress)) {
+        console.error("Invalid wallet address format:", farmerWalletAddress);
+        return {
+          success: false,
+          error: "Blockchain payment is currently unavailable. Please try another payment method or contact support.",
         };
       }
 
@@ -306,9 +365,30 @@ export const usePayment = () => {
       };
     } catch (error: any) {
       console.error("Blockchain payment error:", error);
+      
+      // Provide user-friendly error messages (hide technical details from customers)
+      let errorMessage = "Blockchain payment is currently unavailable. Please try Google Pay or PhonePe.";
+      
+      if (error.message?.includes("MetaMask not installed") || error.message?.includes("not installed")) {
+        errorMessage = "MetaMask is not installed. Please install MetaMask to use blockchain payments, or choose another payment method.";
+      } else if (error.message?.includes("User rejected") || error.code === 4001) {
+        errorMessage = "Transaction was cancelled. You can try again or choose another payment method.";
+      } else if (error.message?.includes("insufficient funds") || error.message?.includes("INSUFFICIENT_FUNDS")) {
+        errorMessage = "Insufficient funds in your wallet. Please add more ETH or choose another payment method.";
+      } else if (error.message?.includes("Blockchain payment is currently unavailable")) {
+        // Use the user-friendly message from validation
+        errorMessage = error.message;
+      } else if (error.message?.includes("contract address not configured") || error.message?.includes("wallet address not configured") || error.message?.includes("Farmer wallet address")) {
+        // Hide technical details - show user-friendly message
+        errorMessage = "Blockchain payment is currently unavailable. Please try Google Pay or PhonePe, or contact support.";
+      } else if (error.message) {
+        // For any other errors, show generic user-friendly message
+        errorMessage = "Blockchain payment is currently unavailable. Please try another payment method or contact support.";
+      }
+      
       return {
         success: false,
-        error: error.message || "Blockchain payment failed",
+        error: errorMessage,
       };
     }
   };
