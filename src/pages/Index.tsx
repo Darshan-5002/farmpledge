@@ -39,7 +39,7 @@ const Index = () => {
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6 pt-10">
               <div className="rounded-xl border bg-card p-4">
-                <p className="text-2xl font-bold">10k+</p>
+                <p className="text-2xl font-bold">3</p>
                 <p className="text-xs text-muted-foreground">Orders fulfilled</p>
               </div>
               <div className="rounded-xl border bg-card p-4">
@@ -47,11 +47,11 @@ const Index = () => {
                 <p className="text-xs text-muted-foreground">On-chain verified</p>
               </div>
               <div className="rounded-xl border bg-card p-4">
-                <p className="text-2xl font-bold">500+</p>
+                <p className="text-2xl font-bold">2</p>
                 <p className="text-xs text-muted-foreground">Happy farmers</p>
               </div>
               <div className="rounded-xl border bg-card p-4">
-                <p className="text-2xl font-bold">4.9</p>
+                <p className="text-2xl font-bold">N/A</p>
                 <p className="text-xs text-muted-foreground">Average rating</p>
               </div>
             </div>

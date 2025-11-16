@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { usePayment } from "@/hooks/usePayment";
+import { useCart } from "@/contexts/CartContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -11,7 +12,6 @@ import {
   ArrowLeft, 
   CreditCard, 
   Loader2, 
-  CheckCircle2,
   ShoppingBag,
   Wallet,
   AlertCircle,
@@ -27,14 +27,22 @@ interface Product {
   price: number;
   quantity: number;
   image?: string;
+  ownerId?: string | null;
+  ownerName?: string | null;
 }
 
 const Checkout = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { processPayment, isProcessing, paymentMethods } = usePayment();
+  const { items: cartItems, clearCart } = useCart();
   
-  // Get product from location state or use demo product
+  // Check if we have cart items or a single product
+  const cartItemsFromState = location.state?.cartItems;
+  const hasCartItems = cartItemsFromState && cartItemsFromState.length > 0;
+  const activeCartItems = hasCartItems ? cartItemsFromState : cartItems;
+  
+  // Get product from location state (for single product checkout)
   const rawProduct = location.state?.product;
   const product: Product = rawProduct
     ? {
@@ -47,6 +55,8 @@ const Checkout = () => {
           ? rawProduct.quantity
           : 1,
         image: rawProduct.image,
+        ownerId: rawProduct.ownerId ?? null,
+        ownerName: rawProduct.ownerName ?? null,
       }
     : {
         id: "demo-1",
@@ -54,10 +64,21 @@ const Checkout = () => {
         price: 50,
         quantity: 1,
       };
+  
+  const isCartCheckout = activeCartItems.length > 0;
+
+  // Log product data for debugging
+  useEffect(() => {
+    console.log("Checkout - Product data:", {
+      id: product.id,
+      name: product.name,
+      ownerId: product.ownerId,
+      ownerName: product.ownerName,
+      rawProduct: rawProduct,
+    });
+  }, [product, rawProduct]);
 
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<"gpay" | "phonepe" | "blockchain" | null>(null);
-  const [paymentCompleted, setPaymentCompleted] = useState(false);
-  const [paymentResult, setPaymentResult] = useState<{ paymentId?: string; orderId?: string; txHash?: string } | null>(null);
   const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(false);
   const [isWalletConnected, setIsWalletConnected] = useState(false);
   const [isConnectingWallet, setIsConnectingWallet] = useState(false);
@@ -165,94 +186,52 @@ const Checkout = () => {
     }
 
     // Get farmer info from product if available
-    const farmerId = (product as any).ownerId;
-    const farmerName = (product as any).ownerName || (product as any).farmer;
-
-    const result = await processPayment(
-      totalAmount,
-      selectedPaymentMethod,
-      product.id,
-      product.name,
+    const farmerId = product.ownerId;
+    const farmerName = product.ownerName;
+    
+    console.log("Checkout - Payment handler:", {
       farmerId,
-      farmerName
-    );
+      farmerName,
+      productOwnerId: product.ownerId,
+      productOwnerName: product.ownerName,
+    });
 
-    if (result.success) {
-      setPaymentCompleted(true);
-      setPaymentResult({
-        paymentId: result.paymentId,
-        orderId: result.orderId,
-        txHash: result.txHash,
-      });
-      
-      // For GPay/PhonePe, payment is handled by Razorpay modal
-      // Success message is shown in the payment hook
-      if (selectedPaymentMethod === "blockchain") {
-        toast.success("Payment processed successfully!");
+    try {
+      const result = await processPayment(
+        totalAmount,
+        selectedPaymentMethod,
+        product.id,
+        product.name,
+        farmerId,
+        farmerName
+      );
+
+      console.log("Payment result:", result);
+
+      if (result.success) {
+        console.log("Payment successful, navigating to confirmation page");
+        // Navigate to order confirmation page with order details
+        navigate("/order-confirmation", {
+          state: {
+            orderId: result.orderId,
+            paymentId: result.paymentId,
+            txHash: result.txHash,
+            productName: product.name,
+            amount: totalAmount,
+            quantity: product.quantity,
+            paymentMethod: selectedPaymentMethod,
+          },
+          replace: true, // Replace current history entry so back button doesn't go back to checkout
+        });
+      } else {
+        console.error("Payment failed:", result.error);
+        toast.error(result.error || "Payment failed");
       }
-    } else {
-      toast.error(result.error || "Payment failed");
+    } catch (error: any) {
+      console.error("Error in handlePayment:", error);
+      toast.error(error.message || "An unexpected error occurred during payment");
     }
   };
-
-  if (paymentCompleted) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-background to-secondary/20 py-12">
-        <div className="container mx-auto px-4 max-w-2xl">
-          <Card className="border-green-500">
-            <CardContent className="pt-12 pb-12">
-              <div className="text-center space-y-6">
-                <div className="mx-auto w-20 h-20 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center">
-                  <CheckCircle2 className="h-10 w-10 text-green-600 dark:text-green-400" />
-                </div>
-                <div>
-                  <h2 className="text-2xl font-bold mb-2">Payment Successful!</h2>
-                  <p className="text-muted-foreground">
-                    Your payment has been processed and transferred to the blockchain.
-                  </p>
-                </div>
-                {paymentResult && (
-                  <div className="space-y-3 text-left bg-muted p-4 rounded-lg">
-                    {paymentResult.orderId && (
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Order ID:</span>
-                        <code className="text-sm">{paymentResult.orderId}</code>
-                      </div>
-                    )}
-                    {paymentResult.paymentId && (
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Payment ID:</span>
-                        <code className="text-sm">{paymentResult.paymentId}</code>
-                      </div>
-                    )}
-                    {paymentResult.txHash && (
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Blockchain TX:</span>
-                        <code className="text-xs">{paymentResult.txHash.slice(0, 10)}...{paymentResult.txHash.slice(-8)}</code>
-                      </div>
-                    )}
-                    <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                      <p className="text-sm text-blue-900 dark:text-blue-100">
-                        <strong>Payment held in escrow:</strong> Your payment will be released to the farmer once delivery is confirmed.
-                      </p>
-                    </div>
-                  </div>
-                )}
-                <div className="flex gap-4 justify-center">
-                  <Button onClick={() => navigate("/products")}>
-                    Continue Shopping
-                  </Button>
-                  <Button variant="outline" onClick={() => navigate("/")}>
-                    Go Home
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-secondary/20">

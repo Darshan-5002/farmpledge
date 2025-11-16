@@ -40,6 +40,12 @@ const ProtectedRoute = ({ children, allowedRoles, redirectTo = "/login" }: Prote
   }
 
   if (allowedRoles && !allowedRoles.includes(role)) {
+    // Redirect based on user's actual role
+    if (role === "consumer") {
+      return <Navigate to="/dashboard" replace />;
+    } else if (role === "farmer" || role === "admin") {
+      return <Navigate to="/admin" replace />;
+    }
     return <Navigate to="/" replace />;
   }
 

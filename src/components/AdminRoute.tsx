@@ -41,7 +41,17 @@ const AdminRoute = ({ children }: AdminRouteProps) => {
   }
 
   // If Firebase is configured, check authentication
-  if (!user || (role !== "admin" && role !== "farmer")) {
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  // Prevent consumers from accessing farmer/admin routes
+  if (role === "consumer") {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  // Only allow admin and farmer roles
+  if (role !== "admin" && role !== "farmer") {
     return <Navigate to="/login" replace />;
   }
 

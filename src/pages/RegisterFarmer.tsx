@@ -9,9 +9,56 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Leaf, Tractor, ShieldCheck, ArrowLeft, ClipboardList } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+
+// List of Indian States and Union Territories
+const INDIAN_STATES = [
+  "Andhra Pradesh",
+  "Arunachal Pradesh",
+  "Assam",
+  "Bihar",
+  "Chhattisgarh",
+  "Goa",
+  "Gujarat",
+  "Haryana",
+  "Himachal Pradesh",
+  "Jharkhand",
+  "Karnataka",
+  "Kerala",
+  "Madhya Pradesh",
+  "Maharashtra",
+  "Manipur",
+  "Meghalaya",
+  "Mizoram",
+  "Nagaland",
+  "Odisha",
+  "Punjab",
+  "Rajasthan",
+  "Sikkim",
+  "Tamil Nadu",
+  "Telangana",
+  "Tripura",
+  "Uttar Pradesh",
+  "Uttarakhand",
+  "West Bengal",
+  "Andaman and Nicobar Islands",
+  "Chandigarh",
+  "Dadra and Nagar Haveli and Daman and Diu",
+  "Delhi",
+  "Jammu and Kashmir",
+  "Ladakh",
+  "Lakshadweep",
+  "Puducherry"
+];
 
 const RegisterFarmer = () => {
   const navigate = useNavigate();
@@ -46,7 +93,7 @@ const RegisterFarmer = () => {
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
 
-    if (!form.farmName || !form.ownerName || !form.email || !form.password) {
+    if (!form.farmName || !form.ownerName || !form.email || !form.password || !form.location) {
       toast.error("Please complete all required fields");
       return;
     }
@@ -171,13 +218,23 @@ const RegisterFarmer = () => {
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="location">Farm location</Label>
-                <Input
-                  id="location"
-                  placeholder="Pune, Maharashtra"
+                <Label htmlFor="location">Farm location (State) *</Label>
+                <Select
                   value={form.location}
-                  onChange={(event) => setForm((prev) => ({ ...prev, location: event.target.value }))}
-                />
+                  onValueChange={(value) => setForm((prev) => ({ ...prev, location: value }))}
+                  required
+                >
+                  <SelectTrigger id="location">
+                    <SelectValue placeholder="Select a state" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {INDIAN_STATES.map((state) => (
+                      <SelectItem key={state} value={state}>
+                        {state}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="password">Password</Label>

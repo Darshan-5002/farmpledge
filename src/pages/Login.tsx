@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState, useRef } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import { signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { useAuth } from "@/contexts/AuthContext";
@@ -29,6 +29,23 @@ const Login = () => {
     if (!hasRedirected.current && !loading && user && role) {
       hasRedirected.current = true;
       console.log("Redirecting after login - role:", role, "user:", user.email);
+      
+      // Validate role matches the login page selection (if on login page)
+      const currentPath = window.location.pathname;
+      if (currentPath === "/login") {
+        // Check if user is trying to login with wrong role
+        if (activeRole === "consumer" && (role === "farmer" || role === "admin")) {
+          toast.error("This account is registered as a farmer. Please use the farmer login.");
+          hasRedirected.current = false;
+          return;
+        }
+        if (activeRole === "farmer" && role === "consumer") {
+          toast.error("This account is registered as a consumer. Please use the consumer login.");
+          hasRedirected.current = false;
+          return;
+        }
+      }
+      
       if (role === "admin") {
         navigate("/admin", { replace: true });
       } else if (role === "farmer") {
@@ -46,7 +63,7 @@ const Login = () => {
     if (!user) {
       hasRedirected.current = false;
     }
-  }, [loading, user, role, navigate]);
+  }, [loading, user, role, navigate, activeRole, verificationStatus]);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -109,6 +126,23 @@ const Login = () => {
           } else {
             userRole = await fetchRoleWithTimeout(currentUser.uid);
           }
+          
+          // Validate role matches the selected login type
+          if (userRole && activeRole === "consumer" && (userRole === "farmer" || userRole === "admin")) {
+            toast.error("This account is registered as a farmer. Please select 'Farmer' login.");
+            setIsSubmitting(false);
+            // Sign out the user since they logged in with wrong role
+            await signOut(auth);
+            return;
+          }
+          if (userRole && activeRole === "farmer" && userRole === "consumer") {
+            toast.error("This account is registered as a consumer. Please select 'Consumer' login.");
+            setIsSubmitting(false);
+            // Sign out the user since they logged in with wrong role
+            await signOut(auth);
+            return;
+          }
+          
           console.log(
             "Login - fetched role:",
             userRole,

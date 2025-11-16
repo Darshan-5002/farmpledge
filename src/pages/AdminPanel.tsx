@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWeb3 } from "@/hooks/useWeb3";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth, type VerificationStatus } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -34,14 +35,16 @@ import {
   Upload,
   Image as ImageIcon,
   Calendar,
+  ShoppingBag,
 } from "lucide-react";
 import { toast } from "sonner";
 import { storage as appwriteStorage, ID } from "@/lib/appwrite";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDistanceToNow } from "date-fns";
 import { isAddress } from "ethers";
+import { databases, appwriteDatabaseId, Query } from "@/lib/appwrite";
 import { db } from "@/lib/firebase";
-import { addDoc, collection, deleteDoc, doc as firestoreDoc, onSnapshot, orderBy, query, serverTimestamp, updateDoc, where } from "firebase/firestore";
+import { onSnapshot, collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, query, where, orderBy } from "firebase/firestore";
 
 interface PaymentRecord {
   id: string;
@@ -70,7 +73,6 @@ interface Product {
 interface FarmerApplicationRow {
   id: string;
   farmName: string;
-  registrationNumber?: string;
   governmentId?: string;
   status: FarmerApplicationStatus;
   submittedAt?: Date | null;
@@ -100,24 +102,7 @@ const AdminPanel = () => {
   const [paymentHistory, setPaymentHistory] = useState<PaymentRecord[]>([]);
   
   // Product Listing State
-  const [products, setProducts] = useState<Product[]>([
-    {
-      id: "1",
-      name: "Fresh Organic Milk (1L)",
-      description: "Pure, organic milk from grass-fed cows. Delivered fresh daily.",
-      price: 50,
-      category: "Dairy",
-      inStock: true,
-    },
-    {
-      id: "2",
-      name: "Farm Fresh Butter (500g)",
-      description: "Hand-churned butter made from premium cream.",
-      price: 120,
-      category: "Dairy",
-      inStock: true,
-    },
-  ]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [isAddingProduct, setIsAddingProduct] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [productForm, setProductForm] = useState({
@@ -135,6 +120,16 @@ const AdminPanel = () => {
   const [applications, setApplications] = useState<FarmerApplicationRow[]>([]);
   const [applicationsLoading, setApplicationsLoading] = useState(false);
   const [processingApplicationId, setProcessingApplicationId] = useState<string | null>(null);
+  
+  // Orders State
+  const [orders, setOrders] = useState<any[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  
+  // Farmer wallet address check (for disabling product listing)
+  const [farmerWalletAddress, setFarmerWalletAddress] = useState<string | null>(null);
+  const [walletAddressLoading, setWalletAddressLoading] = useState(true);
+  const [walletAddressInput, setWalletAddressInput] = useState("");
+  const [submittingWalletAddress, setSubmittingWalletAddress] = useState(false);
 
   const handleSendPayment = async () => {
     if (!recipientAddress || !paymentAmount) {
@@ -394,7 +389,7 @@ const AdminPanel = () => {
     updateData.expiryDate = productForm.expiryDate || null;
 
     if (db && editingProduct?.id) {
-      updateDoc(firestoreDoc(db, "products", editingProduct.id), updateData)
+      updateDoc(doc(db, "products", editingProduct.id), updateData)
         .then(() => {
           toast.success("Product updated successfully");
         })
@@ -455,7 +450,7 @@ const AdminPanel = () => {
   const handleDeleteProduct = (id: string) => {
     if (confirm("Are you sure you want to delete this product?")) {
       if (db) {
-        deleteDoc(firestoreDoc(db, "products", id))
+        deleteDoc(doc(db, "products", id))
           .then(() => toast.success("Product deleted"))
           .catch((err) => {
             console.error("Failed to delete product", err);
@@ -704,7 +699,6 @@ const AdminPanel = () => {
           return {
             id: docSnapshot.id,
             farmName: data.farmName ?? "—",
-            registrationNumber: data.registrationNumber ?? "",
             governmentId: data.governmentId ?? "",
             status: (data.status as FarmerApplicationStatus) ?? "pending",
             submittedAt,
@@ -735,13 +729,13 @@ const AdminPanel = () => {
 
     try {
       setProcessingApplicationId(applicationId);
-      const applicationRef = firestoreDoc(db, "farmerApplications", applicationId);
+      const applicationRef = doc(db, "farmerApplications", applicationId);
       await updateDoc(applicationRef, {
         status: newStatus,
         reviewedAt: serverTimestamp(),
         reviewerId: user?.uid ?? null,
       });
-      await updateDoc(firestoreDoc(db, "users", applicationId), {
+      await updateDoc(doc(db, "users", applicationId), {
         verificationStatus: newStatus,
       });
 
@@ -758,50 +752,38 @@ const AdminPanel = () => {
     }
   };
 
-  const defaultTab = role === "admin" ? "applications" : "products";
+  // Real-time check for farmer verification status (in addition to AuthContext)
+  // MUST be before any conditional returns to follow Rules of Hooks
+  const [realTimeVerificationStatus, setRealTimeVerificationStatus] = useState<VerificationStatus>(verificationStatus);
+  
+  useEffect(() => {
+    if (role === "farmer" && user?.uid && db) {
+      const applicationRef = doc(db, "farmerApplications", user.uid);
+      const unsubscribe = onSnapshot(
+        applicationRef,
+        (snapshot) => {
+          if (snapshot.exists()) {
+            const data = snapshot.data();
+            const status = (data.status as VerificationStatus) ?? null;
+            setRealTimeVerificationStatus(status);
+          } else {
+            // If no application doc, use AuthContext status
+            setRealTimeVerificationStatus(verificationStatus);
+          }
+        },
+        (error) => {
+          console.error("Failed to listen to verification status", error);
+          // Fallback to AuthContext status on error
+          setRealTimeVerificationStatus(verificationStatus);
+        }
+      );
+      return () => unsubscribe();
+    } else {
+      setRealTimeVerificationStatus(verificationStatus);
+    }
+  }, [role, user?.uid, verificationStatus, db]);
 
-  if (role === "farmer" && verificationStatus !== "approved") {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-background to-secondary/20">
-        <div className="container mx-auto px-4 py-16 max-w-3xl">
-          <Card className="shadow-lg">
-            <CardHeader className="space-y-3 text-center">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-                <Shield className="h-6 w-6 text-primary" />
-              </div>
-              <CardTitle className="text-2xl">Farmer verification required</CardTitle>
-              <CardDescription>
-                {verificationStatus === "pending"
-                  ? "Your application is under review. Once approved, the farmer dashboard will be unlocked automatically."
-                  : verificationStatus === "rejected"
-                    ? "We need additional information to complete your verification. Please update and resubmit your application."
-                    : "Complete your verification to access blockchain payments and product management tools."}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="rounded-lg border border-dashed border-primary/30 bg-primary/5 p-4 text-sm text-muted-foreground flex items-start gap-3">
-                <FileSearch className="h-4 w-4 text-primary mt-1" />
-                <div>
-                  Our onboarding specialists validate every farm partner to ensure quality and traceability. Keep an eye
-                  on your email for status updates.
-                </div>
-              </div>
-              <div className="grid gap-3">
-                <Button size="lg" onClick={() => navigate("/farmer/verification")}>
-                  {verificationStatus === "pending" ? "View submitted application" : "Complete verification"}
-                </Button>
-                <Button variant="ghost" onClick={() => navigate("/products")}>
-                  Browse marketplace
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
-
-  // Subscribe to products for listing management
+  // Subscribe to products for listing management - MUST be before conditional returns
   useEffect(() => {
     if (!db) return;
     try {
@@ -837,6 +819,248 @@ const AdminPanel = () => {
       console.error("Products subscription error", err);
     }
   }, [role, user?.uid]);
+
+  // Subscribe to orders for farmers from Appwrite - MUST be before conditional returns
+  useEffect(() => {
+    if (role !== "farmer" || !user?.uid) {
+      setOrders([]);
+      setOrdersLoading(false);
+      return;
+    }
+
+    setOrdersLoading(true);
+    const fetchOrders = async () => {
+      try {
+        const farmerOrders = await databases.listDocuments(
+          appwriteDatabaseId,
+          "orders",
+          [Query.equal("farmerId", user.uid), Query.orderDesc("$createdAt")],
+        );
+
+        const ordersData = farmerOrders.documents.map((doc) => {
+          let parsedAmount: number;
+          if (typeof doc.amount === "string") {
+            parsedAmount = parseFloat(doc.amount);
+            if (isNaN(parsedAmount)) {
+              console.warn("Invalid amount format:", doc.amount);
+              parsedAmount = 0;
+            }
+          } else if (typeof doc.amount === "number") {
+            parsedAmount = doc.amount;
+          } else {
+            parsedAmount = 0;
+          }
+
+          // Fix for old orders: If currency is ETH but amount is > 1, it's likely stored as INR
+          if (doc.currency === "ETH" && parsedAmount > 1) {
+            console.warn(`⚠️ Detected incorrect ETH amount (likely stored as INR): ${parsedAmount}. Converting...`);
+            const ETH_PER_INR = 0.000016;
+            parsedAmount = parsedAmount * ETH_PER_INR;
+            console.log(`✅ Converted to ETH amount: ${parsedAmount.toFixed(6)}`);
+          }
+
+          return {
+            id: doc.$id,
+            orderId: doc.orderId ?? "",
+            productId: doc.productId ?? "",
+            productName: doc.productName ?? "",
+            customerId: doc.customerId ?? "",
+            customerEmail: doc.customerEmail ?? "",
+            farmerId: doc.farmerId ?? "",
+            farmerName: doc.farmerName ?? "",
+            farmerWalletAddress: doc.farmerWalletAddress ?? "",
+            amount: parsedAmount,
+            currency: doc.currency || "INR",
+            paymentMethod: doc.paymentMethod ?? "",
+            paymentId: doc.paymentId ?? "",
+            txHash: doc.txHash ?? "",
+            orderHash: doc.orderHash ?? "",
+            status: doc.status ?? "pending",
+            paymentStatus: doc.paymentStatus ?? "pending",
+            deliveryStatus: doc.deliveryStatus ?? "pending",
+            createdAt: doc.$createdAt ?? "",
+            razorpayOrderId: doc.razorpayOrderId ?? "",
+            razorpaySignature: doc.razorpaySignature ?? "",
+          };
+        });
+
+        setOrders(ordersData);
+      } catch (error: any) {
+        console.error("Error fetching orders from Appwrite:", error);
+        toast.error("Failed to load orders");
+      } finally {
+        setOrdersLoading(false);
+      }
+    };
+
+    fetchOrders();
+    // Refresh orders every 30 seconds
+    const interval = setInterval(fetchOrders, 30000);
+    return () => clearInterval(interval);
+  }, [role, user?.uid]);
+
+  // Check farmer wallet address (for farmers only - required for product listing)
+  useEffect(() => {
+    const checkFarmerWalletAddress = async () => {
+      if (role !== "farmer" || !user?.uid) {
+        setWalletAddressLoading(false);
+        return;
+      }
+
+      try {
+        if (databases) {
+          const userDoc = await databases.getDocument(
+            appwriteDatabaseId,
+            "users",
+            user.uid
+          );
+          const walletAddr = userDoc?.walletAddress;
+          if (walletAddr && /^0x[a-fA-F0-9]{40}$/.test(walletAddr)) {
+            setFarmerWalletAddress(walletAddr);
+          } else {
+            setFarmerWalletAddress(null);
+          }
+        } else {
+          setFarmerWalletAddress(null);
+        }
+      } catch (error: any) {
+        console.error("Failed to fetch farmer wallet address:", error);
+        setFarmerWalletAddress(null);
+      } finally {
+        setWalletAddressLoading(false);
+      }
+    };
+
+    checkFarmerWalletAddress();
+  }, [role, user?.uid]);
+
+  // Function to submit farmer wallet address
+  const handleSubmitWalletAddress = async () => {
+    if (!walletAddressInput.trim()) {
+      toast.error("Please enter a wallet address");
+      return;
+    }
+
+    const trimmedAddress = walletAddressInput.trim();
+
+    // Validate address format
+    if (!trimmedAddress.startsWith("0x")) {
+      toast.error("Wallet address must start with 0x");
+      return;
+    }
+
+    if (!/^0x[a-fA-F0-9]{40}$/.test(trimmedAddress)) {
+      toast.error("Invalid wallet address format. Must be 42 characters (0x + 40 hex characters)");
+      return;
+    }
+
+    if (!databases || !user?.uid) {
+      toast.error("Unable to save wallet address. Please try again.");
+      return;
+    }
+
+    try {
+      setSubmittingWalletAddress(true);
+
+      // Try to update wallet address in Appwrite users collection
+      // If document doesn't exist, create it
+      try {
+        await databases.updateDocument(
+          appwriteDatabaseId,
+          "users",
+          user.uid,
+          {
+            walletAddress: trimmedAddress,
+          }
+        );
+      } catch (updateError: any) {
+        // If document doesn't exist (404), create it
+        if (updateError.code === 404 || updateError.message?.includes("not found") || updateError.type === "document_not_found") {
+          await databases.createDocument(
+            appwriteDatabaseId,
+            "users",
+            user.uid, // Use user.uid as document ID (custom ID)
+            {
+              walletAddress: trimmedAddress,
+              email: user.email || "",
+              role: role || "farmer",
+            }
+          );
+        } else {
+          throw updateError; // Re-throw if it's a different error
+        }
+      }
+
+      // Also update in Firestore if available
+      if (db) {
+        try {
+          await updateDoc(doc(db, "users", user.uid), {
+            walletAddress: trimmedAddress,
+          });
+        } catch (firestoreError) {
+          console.warn("Failed to update wallet address in Firestore:", firestoreError);
+          // Non-critical, continue
+        }
+      }
+
+      setFarmerWalletAddress(trimmedAddress);
+      setWalletAddressInput("");
+      toast.success("Wallet address saved successfully! Product listing is now enabled.");
+    } catch (error: any) {
+      console.error("Failed to save wallet address:", error);
+      toast.error(error.message || "Failed to save wallet address. Please try again.");
+    } finally {
+      setSubmittingWalletAddress(false);
+    }
+  };
+
+  // Use real-time status if available, otherwise fallback to AuthContext
+  const effectiveVerificationStatus = role === "farmer" && realTimeVerificationStatus 
+    ? realTimeVerificationStatus 
+    : verificationStatus;
+
+  const defaultTab = role === "admin" ? "applications" : role === "farmer" ? "orders" : "products";
+
+  if (role === "farmer" && effectiveVerificationStatus !== "approved") {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-background to-secondary/20">
+        <div className="container mx-auto px-4 py-16 max-w-3xl">
+          <Card className="shadow-lg">
+            <CardHeader className="space-y-3 text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+                <Shield className="h-6 w-6 text-primary" />
+              </div>
+              <CardTitle className="text-2xl">Farmer verification required</CardTitle>
+              <CardDescription>
+                {effectiveVerificationStatus === "pending"
+                  ? "Your application is under review. Once approved, the farmer dashboard will be unlocked automatically."
+                  : effectiveVerificationStatus === "rejected"
+                    ? "We need additional information to complete your verification. Please update and resubmit your application."
+                    : "Complete your verification to access blockchain payments and product management tools."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="rounded-lg border border-dashed border-primary/30 bg-primary/5 p-4 text-sm text-muted-foreground flex items-start gap-3">
+                <FileSearch className="h-4 w-4 text-primary mt-1" />
+                <div>
+                  Our onboarding specialists validate every farm partner to ensure quality and traceability. Keep an eye
+                  on your email for status updates.
+                </div>
+              </div>
+              <div className="grid gap-3">
+                <Button size="lg" onClick={() => navigate("/farmer/verification")}>
+                  {effectiveVerificationStatus === "pending" ? "View submitted application" : "Complete verification"}
+                </Button>
+                <Button variant="ghost" onClick={() => navigate("/products")}>
+                  Browse marketplace
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-secondary/20">
@@ -1026,25 +1250,99 @@ const AdminPanel = () => {
               <Wallet className="mr-2 h-4 w-4" />
               Payments
             </TabsTrigger>
+            {role === "farmer" && (
+              <TabsTrigger value="orders">
+                <ShoppingBag className="mr-2 h-4 w-4" />
+                Orders
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="products" className="space-y-4">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>Product Listing</CardTitle>
-                    <CardDescription>Manage your product inventory</CardDescription>
-                  </div>
-                  {!isAddingProduct && (
-                    <Button onClick={() => setIsAddingProduct(true)}>
-                      <Plus className="mr-2 h-4 w-4" />
-                      Add Product
+            {/* Check if farmer has wallet address (only for farmers) */}
+            {role === "farmer" && !walletAddressLoading && !farmerWalletAddress ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <AlertCircle className="h-5 w-5 text-amber-500" />
+                    Product Listing Disabled
+                  </CardTitle>
+                  <CardDescription>
+                    Blockchain wallet address required to list products
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <Alert className="border-amber-500/50 bg-amber-50 dark:bg-amber-950/20">
+                    <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                    <AlertDescription className="text-amber-800 dark:text-amber-200">
+                      <p className="font-semibold mb-2">Product listing is disabled until you provide your blockchain wallet address.</p>
+                      <p className="mb-3 text-sm">
+                        <strong>Why is this required?</strong> Your wallet address is needed to receive payments when customers purchase your products through blockchain payments.
+                      </p>
+                    </AlertDescription>
+                  </Alert>
+
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="wallet-address">Your Blockchain Wallet Address</Label>
+                      <Input
+                        id="wallet-address"
+                        placeholder="0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"
+                        value={walletAddressInput}
+                        onChange={(e) => setWalletAddressInput(e.target.value)}
+                        disabled={submittingWalletAddress}
+                        className="font-mono text-sm"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Enter your MetaMask or other Ethereum-compatible wallet address. This address will receive payments for your products.
+                      </p>
+                    </div>
+                    <Button 
+                      onClick={handleSubmitWalletAddress}
+                      disabled={submittingWalletAddress || !walletAddressInput.trim()}
+                      className="w-full"
+                    >
+                      {submittingWalletAddress ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <Wallet className="mr-2 h-4 w-4" />
+                          Submit Wallet Address
+                        </>
+                      )}
                     </Button>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent>
+                    <div className="text-xs text-muted-foreground space-y-1">
+                      <p><strong>How to get your wallet address:</strong></p>
+                      <ol className="list-decimal list-inside space-y-1 ml-2">
+                        <li>Open MetaMask or your wallet extension</li>
+                        <li>Click on your account name</li>
+                        <li>Copy your wallet address (starts with 0x)</li>
+                        <li>Paste it in the field above and click Submit</li>
+                      </ol>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle>Product Listing</CardTitle>
+                      <CardDescription>Manage your product inventory</CardDescription>
+                    </div>
+                    {!isAddingProduct && (role === "admin" || farmerWalletAddress) && (
+                      <Button onClick={() => setIsAddingProduct(true)}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add Product
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
                 {isAddingProduct ? (
                   <div className="space-y-4">
                     <div className="space-y-2">
@@ -1087,6 +1385,9 @@ const AdminPanel = () => {
                           <option value="Dairy">Dairy</option>
                           <option value="Cheese">Cheese</option>
                           <option value="Butter">Butter</option>
+                          <option value="Vegetables">Vegetables</option>
+                          <option value="Fruits">Fruits</option>
+                          <option value="Grains">Grains</option>
                           <option value="Other">Other</option>
                         </select>
                       </div>
@@ -1329,6 +1630,7 @@ const AdminPanel = () => {
                 )}
               </CardContent>
             </Card>
+            )}
           </TabsContent>
 
           <TabsContent value="payments" className="space-y-4">
@@ -1539,7 +1841,6 @@ const AdminPanel = () => {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Farm name</TableHead>
-                          <TableHead>Registration</TableHead>
                           <TableHead>Govt. ID</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Submitted</TableHead>
@@ -1560,7 +1861,6 @@ const AdminPanel = () => {
                                 )}
                               </div>
                             </TableCell>
-                            <TableCell>{application.registrationNumber || "—"}</TableCell>
                             <TableCell>{application.governmentId || "—"}</TableCell>
                             <TableCell>
                               {application.status === "approved" ? (
@@ -1609,6 +1909,95 @@ const AdminPanel = () => {
                                   Request Update
                                 </Button>
                               </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
+
+          {/* Orders Tab for Farmers */}
+          {role === "farmer" && (
+            <TabsContent value="orders" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>My Orders</CardTitle>
+                  <CardDescription>Orders placed for your products</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {ordersLoading ? (
+                    <div className="py-8 text-center">
+                      <Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground mt-2">Loading orders...</p>
+                    </div>
+                  ) : orders.length === 0 ? (
+                    <div className="py-8 text-center">
+                      <ShoppingBag className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+                      <p className="text-muted-foreground">No orders yet</p>
+                      <p className="text-sm text-muted-foreground mt-2">
+                        Orders will appear here when customers purchase your products
+                      </p>
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Order ID</TableHead>
+                          <TableHead>Product</TableHead>
+                          <TableHead>Customer</TableHead>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Payment Method</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Created</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {orders.map((order: any) => (
+                          <TableRow key={order.id}>
+                            <TableCell>
+                              <code className="text-xs">{order.orderId || order.id}</code>
+                            </TableCell>
+                            <TableCell className="font-medium">{order.productName || "N/A"}</TableCell>
+                            <TableCell>
+                              <div className="text-sm">
+                                <p>{order.customerEmail || "N/A"}</p>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              {order.currency === "ETH" 
+                                ? `${typeof order.amount === "number" ? order.amount.toFixed(6) : order.amount} ETH` 
+                                : `₹${typeof order.amount === "number" ? order.amount.toFixed(2) : order.amount || "0.00"}`}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline">
+                                {order.paymentMethod === "blockchain" 
+                                  ? "Blockchain" 
+                                  : order.paymentMethod === "gpay" 
+                                  ? "Google Pay" 
+                                  : order.paymentMethod === "phonepe"
+                                  ? "PhonePe"
+                                  : order.paymentMethod || "N/A"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {order.deliveryStatus === "confirmed" || order.status === "completed" ? (
+                                <Badge className="bg-green-500">Completed</Badge>
+                              ) : order.paymentStatus === "locked" ? (
+                                <Badge className="bg-yellow-500">Pending Delivery</Badge>
+                              ) : order.paymentStatus === "pending" ? (
+                                <Badge variant="outline">Payment Pending</Badge>
+                              ) : (
+                                <Badge variant="secondary">{order.status || "Unknown"}</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {order.createdAt && typeof order.createdAt.toDate === "function"
+                                ? formatDistanceToNow(order.createdAt.toDate(), { addSuffix: true })
+                                : "N/A"}
                             </TableCell>
                           </TableRow>
                         ))}

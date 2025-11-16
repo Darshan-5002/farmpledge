@@ -52,11 +52,11 @@ const getProvider = async () => {
   }
 
   try {
-    // Request account access
-    await window.ethereum.request({ method: "eth_requestAccounts" });
-    
     // Get the provider (handle multiple providers if present)
     const ethereum = window.ethereum.providers?.find((p: any) => p.isMetaMask) || window.ethereum;
+    
+    // Request account access - this will trigger MetaMask popup if not already connected
+    await ethereum.request({ method: "eth_requestAccounts" });
     
     return new ethers.BrowserProvider(ethereum);
   } catch (error: any) {
@@ -85,7 +85,32 @@ const getContract = async () => {
   }
   
   const provider = await getProvider();
+  
+  // Ensure we have a signer - this will trigger MetaMask if needed
   const signer = await provider.getSigner();
+  
+  // Verify signer has an address (wallet is connected)
+  let address: string;
+  try {
+    address = await signer.getAddress();
+    if (!address) {
+      throw new Error("Wallet not connected. Please connect your MetaMask wallet.");
+    }
+    console.log("Wallet connected, address:", address);
+  } catch (error: any) {
+    console.error("Error getting signer address:", error);
+    // Try to reconnect and get a new signer
+    const ethereum = window.ethereum.providers?.find((p: any) => p.isMetaMask) || window.ethereum;
+    await ethereum.request({ method: "eth_requestAccounts" });
+    const newSigner = await provider.getSigner();
+    address = await newSigner.getAddress();
+    if (!address) {
+      throw new Error("Wallet not connected. Please connect your MetaMask wallet.");
+    }
+    // Use the new signer for the contract
+    return new ethers.Contract(ESCROW_CONTRACT_ADDRESS, ESCROW_ABI, newSigner);
+  }
+  
   return new ethers.Contract(ESCROW_CONTRACT_ADDRESS, ESCROW_ABI, signer);
 };
 
@@ -103,28 +128,69 @@ export const escrowService = {
     deadlineDays: number = 7
   ) {
     try {
+      // Ensure MetaMask is available and connected before proceeding
+      if (!isMetaMaskInstalled()) {
+        toast.error("MetaMask is not installed. Please install MetaMask to continue.");
+        window.open("https://metamask.io/download/", "_blank");
+        throw new Error("MetaMask not installed");
+      }
+
       const contract = await getContract();
       const deadline = Math.floor(Date.now() / 1000) + deadlineDays * 24 * 60 * 60;
+      
+      // Prepare transaction - this should trigger MetaMask popup
+      const amountWei = ethers.parseEther(amountInETH);
+      
+      console.log("Sending transaction to create order:", {
+        orderId,
+        farmerAddress,
+        productId,
+        amountInETH,
+        amountWei: amountWei.toString(),
+        deadline
+      });
+      
+      // Validate farmer address before sending transaction
+      if (!ethers.isAddress(farmerAddress)) {
+        throw new Error("Invalid farmer wallet address");
+      }
+
+      // Send transaction - this will trigger MetaMask popup
+      // The transaction call should automatically prompt MetaMask for user confirmation
+      console.log("Calling contract.createOrder - this should trigger MetaMask popup");
       
       const tx = await contract.createOrder(
         orderId,
         farmerAddress,
         productId,
         deadline,
-        { value: ethers.parseEther(amountInETH) }
+        { value: amountWei }
       );
 
+      // If we get here, the transaction was sent (user approved in MetaMask)
+      console.log("Transaction sent, hash:", tx.hash);
+      
       toast.info("Transaction submitted. Waiting for confirmation...");
       const receipt = await tx.wait();
       
-      // Get order hash from event
-      const orderCreatedEvent = receipt.logs.find(
-        (log: any) => log.topics[0] === ethers.id("OrderCreated(bytes32,string,address,address,uint256,string)")
-      );
+      console.log("Transaction confirmed, receipt:", receipt);
       
+      // Get order hash from event (non-critical - don't fail if event parsing fails)
       let orderHash: string | null = null;
-      if (orderCreatedEvent) {
-        orderHash = ethers.hexlify(orderCreatedEvent.topics[1]);
+      try {
+        const orderCreatedEvent = receipt.logs.find(
+          (log: any) => log.topics[0] === ethers.id("OrderCreated(bytes32,string,address,address,uint256,string)")
+        );
+        
+        if (orderCreatedEvent) {
+          orderHash = ethers.hexlify(orderCreatedEvent.topics[1]);
+          console.log("Order hash extracted from event:", orderHash);
+        } else {
+          console.warn("OrderCreated event not found in receipt logs");
+        }
+      } catch (eventError: any) {
+        // Event parsing failed - not critical, transaction is still successful
+        console.warn("Failed to parse order event (non-critical):", eventError);
       }
 
       toast.success("Order created! Funds locked in escrow.");
@@ -135,16 +201,28 @@ export const escrowService = {
       };
     } catch (error: any) {
       console.error("Create order error:", error);
+      console.error("Error details:", {
+        code: error.code,
+        message: error.message,
+        reason: error.reason,
+        data: error.data
+      });
       
       // Show user-friendly error messages
       let errorMessage = "Blockchain payment is currently unavailable. Please try another payment method.";
       
       if (error.message?.includes("Blockchain payment is currently unavailable")) {
         errorMessage = error.message;
-      } else if (error.reason?.includes("user rejected") || error.code === 4001) {
+      } else if (error.message?.includes("MetaMask not installed")) {
+        errorMessage = "MetaMask is not installed. Please install MetaMask to use blockchain payments.";
+      } else if (error.message?.includes("Wallet not connected")) {
+        errorMessage = "Please connect your MetaMask wallet to continue.";
+      } else if (error.reason?.includes("user rejected") || error.code === 4001 || error.message?.includes("User rejected") || error.message?.includes("user rejected")) {
         errorMessage = "Transaction was cancelled. You can try again or choose another payment method.";
-      } else if (error.reason?.includes("insufficient funds")) {
+      } else if (error.reason?.includes("insufficient funds") || error.message?.includes("insufficient funds") || error.message?.includes("INSUFFICIENT_FUNDS")) {
         errorMessage = "Insufficient funds in your wallet. Please add more ETH or choose another payment method.";
+      } else if (error.message?.includes("user rejected") || error.code === "ACTION_REJECTED") {
+        errorMessage = "Transaction was cancelled. You can try again or choose another payment method.";
       }
       
       toast.error(errorMessage);

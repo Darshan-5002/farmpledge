@@ -1,0 +1,75 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user is the owner
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Users collection - users can read/write their own data
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId);
+    }
+    
+    // Products collection
+    match /products/{productId} {
+      // Anyone can read products (for public marketplace)
+      allow read: if true;
+      // Only authenticated users can create products
+      // Users can update/delete their own products
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && 
+        resource.data.ownerId == request.auth.uid;
+    }
+    
+    // Orders collection
+    match /orders/{orderId} {
+      // Customers can read their own orders
+      // Farmers can read orders for their products
+      allow read: if isAuthenticated() && 
+        (resource.data.customerId == request.auth.uid ||
+         resource.data.farmerId == request.auth.uid);
+      
+      // Customers can create orders
+      allow create: if isAuthenticated() && 
+        request.resource.data.customerId == request.auth.uid;
+      
+      // Customers and farmers can update orders (for status changes)
+      allow update: if isAuthenticated() && 
+        (resource.data.customerId == request.auth.uid ||
+         resource.data.farmerId == request.auth.uid);
+      
+      // No delete for now (or add admin check if needed)
+      allow delete: if false;
+    }
+    
+    // Farmer applications collection
+    match /farmerApplications/{applicationId} {
+      // Users can read their own applications (by email)
+      // For now, allow all authenticated users to read (you can restrict later)
+      allow read: if isAuthenticated();
+      
+      // Authenticated users can create applications
+      allow create: if isAuthenticated();
+      
+      // Allow updates for now (you can add admin check later)
+      allow update: if isAuthenticated();
+      
+      // Allow delete for now (you can add admin check later)
+      allow delete: if isAuthenticated();
+    }
+    
+    // Default: deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+

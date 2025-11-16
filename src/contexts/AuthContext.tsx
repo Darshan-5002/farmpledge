@@ -144,6 +144,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setUser(null);
     setRole(null);
     setVerificationStatus(null);
+    // Clear cart from localStorage when user logs out
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("cart");
+    }
   };
 
   const value = useMemo(

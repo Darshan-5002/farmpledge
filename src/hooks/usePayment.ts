@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { databases, ID, Query, appwriteDatabaseId } from "@/lib/appwrite";
 import { useAuth } from "@/contexts/AuthContext";
 
 interface PaymentMethod {
@@ -135,79 +134,122 @@ export const usePayment = () => {
         return await processMockGPayPayment(amount, method, productId, productName, farmerId, farmerName);
       }
 
-      // Create order in Firestore first (escrow status)
+      // Create order in Appwrite first (escrow status)
       const orderId = `ORDER_${Date.now()}_${Math.random().toString(36).substring(7)}`;
       
-      if (db && user) {
-        await setDoc(doc(db, "orders", orderId), {
-          orderId,
-          productId,
-          productName,
-          customerId: user.uid,
-          customerEmail: user.email,
-          farmerId: farmerId || "unknown",
-          farmerName: farmerName || "Unknown Farmer",
-          amount,
-          currency: "INR",
-          paymentMethod: method,
-          status: "pending", // Payment held in escrow
-          paymentStatus: "pending",
-          deliveryStatus: "pending",
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+      if (databases && user) {
+        try {
+          await databases.createDocument(
+            appwriteDatabaseId,
+            "orders",
+            ID.unique(),
+            {
+              orderId,
+              productId,
+              productName,
+              customerId: user.uid,
+              customerEmail: user.email || "",
+              farmerId: farmerId || "unknown",
+              farmerName: farmerName || "Unknown Farmer",
+              amount: amount.toString(),
+              currency: "INR",
+              paymentMethod: method,
+              paymentId: "", // Will be updated after payment
+              status: "pending", // Payment held in escrow
+              paymentStatus: "pending",
+              deliveryStatus: "pending",
+              razorpayOrderId: "", // Will be updated after payment
+              razorpaySignature: "", // Will be updated after payment
+            }
+          );
+        } catch (error) {
+          console.error("Failed to create order in Appwrite:", error);
+        }
       }
 
-      // Initialize Razorpay
-      const options = {
-        key: RAZORPAY_KEY,
-        amount: amount * 100, // Convert to paise
-        currency: "INR",
-        name: "FreshPledge",
-        description: `Payment for ${productName}`,
-        method: method === "gpay" ? "gpay" : "wallet",
-        handler: async function (response: any) {
-          // Payment successful - update order status
-          if (db) {
-            await setDoc(
-              doc(db, "orders", orderId),
-              {
+      // Wrap Razorpay payment in a Promise to wait for actual completion
+      return new Promise<PaymentResult>((resolve, reject) => {
+        // Initialize Razorpay
+        const options = {
+          key: RAZORPAY_KEY,
+          amount: amount * 100, // Convert to paise
+          currency: "INR",
+          name: "FreshPledge",
+          description: `Payment for ${productName}`,
+          method: method === "gpay" ? "gpay" : "wallet",
+          handler: async function (response: any) {
+            try {
+              // Payment successful - update order status in Appwrite
+              // First, find the order by orderId
+              if (databases && user) {
+                try {
+                  // List orders and find the one with matching orderId
+                  const orders = await databases.listDocuments(
+                    appwriteDatabaseId,
+                    "orders",
+                    [
+                      Query.equal("customerId", user.uid),
+                      Query.equal("orderId", orderId)
+                    ]
+                  );
+                  
+                  if (orders.documents.length > 0) {
+                    const orderDoc = orders.documents[0];
+                    await databases.updateDocument(
+                      appwriteDatabaseId,
+                      "orders",
+                      orderDoc.$id,
+                      {
+                        paymentId: response.razorpay_payment_id,
+                        paymentStatus: "completed",
+                        status: "paid", // Payment received, held in escrow
+                        razorpayOrderId: response.razorpay_order_id,
+                        razorpaySignature: response.razorpay_signature,
+                      }
+                    );
+                  }
+                } catch (updateError) {
+                  console.error("Failed to update order in Appwrite:", updateError);
+                }
+              }
+
+              toast.success("Payment successful! Order placed. Payment held in escrow until delivery.");
+              
+              // Resolve with success result
+              resolve({
+                success: true,
+                orderId,
                 paymentId: response.razorpay_payment_id,
-                paymentStatus: "completed",
-                status: "paid", // Payment received, held in escrow
-                razorpayOrderId: response.razorpay_order_id,
-                razorpaySignature: response.razorpay_signature,
-                updatedAt: serverTimestamp(),
-              },
-              { merge: true }
-            );
-          }
-
-          toast.success("Payment successful! Order placed. Payment held in escrow until delivery.");
-        },
-        prefill: {
-          email: user?.email || "",
-          name: user?.displayName || "",
-        },
-        theme: {
-          color: "#16a34a",
-        },
-        modal: {
-          ondismiss: function() {
-            toast.error("Payment cancelled");
+              });
+            } catch (error: any) {
+              console.error("Error updating order after payment:", error);
+              reject({
+                success: false,
+                error: "Payment successful but failed to update order. Please contact support.",
+              });
+            }
           },
-        },
-      };
+          prefill: {
+            email: user?.email || "",
+            name: user?.displayName || "",
+          },
+          theme: {
+            color: "#16a34a",
+          },
+          modal: {
+            ondismiss: function() {
+              toast.error("Payment cancelled");
+              resolve({
+                success: false,
+                error: "Payment was cancelled",
+              });
+            },
+          },
+        };
 
-      const razorpay = new (window as any).Razorpay(options);
-      razorpay.open();
-
-      // Return order ID immediately (payment will be confirmed via handler)
-      return {
-        success: true,
-        orderId,
-        paymentId: `pending_${orderId}`,
-      };
+        const razorpay = new (window as any).Razorpay(options);
+        razorpay.open();
+      });
     } catch (error: any) {
       console.error("GPay payment error:", error);
       return {
@@ -231,27 +273,32 @@ export const usePayment = () => {
     const orderId = `ORDER_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     const paymentId = `PAY_${method.toUpperCase()}_${Date.now()}`;
 
-    // Create order in Firestore with escrow status
-    if (db && user) {
+    // Create order in Appwrite with escrow status
+    if (databases && user) {
       try {
-        await setDoc(doc(db, "orders", orderId), {
-          orderId,
-          productId,
-          productName,
-          customerId: user.uid,
-          customerEmail: user.email,
-          farmerId: farmerId || "unknown",
-          farmerName: farmerName || "Unknown Farmer",
-          amount,
-          currency: "INR",
-          paymentMethod: method,
-          paymentId,
-          status: "paid", // Payment received, held in escrow
-          paymentStatus: "completed",
-          deliveryStatus: "pending",
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+        await databases.createDocument(
+          appwriteDatabaseId,
+          "orders",
+          ID.unique(),
+          {
+            orderId,
+            productId,
+            productName,
+            customerId: user.uid,
+            customerEmail: user.email || "",
+            farmerId: farmerId || "unknown",
+            farmerName: farmerName || "Unknown Farmer",
+            amount: amount.toString(),
+            currency: "INR",
+            paymentMethod: method,
+            paymentId,
+            status: "paid", // Payment received, held in escrow
+            paymentStatus: "completed",
+            deliveryStatus: "pending",
+            razorpayOrderId: "", // Not applicable for mock payments
+            razorpaySignature: "", // Not applicable for mock payments
+          }
+        );
 
         toast.success("Payment successful! Order placed. Payment held in escrow until delivery.");
         return {
@@ -333,31 +380,88 @@ export const usePayment = () => {
         return result;
       }
 
-      // Save order to Firestore for tracking
-      if (db && user) {
-        await setDoc(doc(db, "orders", orderId), {
-          orderId,
-          productId,
-          productName,
-          customerId: user.uid,
-          customerEmail: user.email,
-          farmerId: farmerId || "unknown",
-          farmerName: farmerName || "Unknown Farmer",
-          farmerWalletAddress,
-          amount,
-          currency: "ETH",
-          paymentMethod: "blockchain",
-          txHash: result.txHash,
-          orderHash: result.orderHash,
-          status: "created", // Created in escrow, not yet released
-          paymentStatus: "locked", // Funds locked in escrow
-          deliveryStatus: "pending",
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+      // Transaction was successful - funds are locked in escrow
+      // Save order to Appwrite Database for tracking (non-blocking - don't fail if this errors)
+      console.log("=== ATTEMPTING TO SAVE ORDER TO APPWRITE ===");
+      console.log("Order details:", {
+        orderId,
+        databases: !!databases,
+        user: !!user,
+        userId: user?.uid,
+        userEmail: user?.email,
+        farmerId: farmerId || "MISSING/UNKNOWN",
+        farmerName: farmerName || "MISSING/UNKNOWN",
+        productId,
+        productName,
+        amount,
+      });
+      
+      if (!farmerId || farmerId === "unknown") {
+        console.warn("⚠️ WARNING: farmerId is missing or 'unknown'! Order will not be visible to farmer!");
+        console.warn("Product ownerId should be set when product is created.");
+      }
+
+      if (databases && user) {
+        try {
+          // Convert ethAmount string to number for storage (Appwrite may handle strings better)
+          const ethAmountNum = parseFloat(ethAmount);
+          
+          console.log("💾 Storing order with amounts:", {
+            originalINR: amount,
+            ethAmountString: ethAmount,
+            ethAmountNumber: ethAmountNum,
+            currency: "ETH"
+          });
+          
+          const orderData = {
+            orderId,
+            productId,
+            productName,
+            customerId: user.uid,
+            customerEmail: user.email || "",
+            farmerId: farmerId || "unknown",
+            farmerName: farmerName || "Unknown Farmer",
+            farmerWalletAddress: farmerWalletAddress || "",
+            amount: ethAmountNum.toString(), // Store as string to preserve precision
+            currency: "ETH",
+            paymentMethod: "blockchain",
+            paymentId: "", // Not applicable for blockchain
+            txHash: result.txHash || "",
+            orderHash: result.orderHash || "",
+            status: "created", // Created in escrow, not yet released
+            paymentStatus: "locked", // Funds locked in escrow
+            deliveryStatus: "pending",
+            razorpayOrderId: "", // Not applicable for blockchain payments
+            razorpaySignature: "", // Not applicable for blockchain payments
+          };
+          
+          console.log("Saving order data to Appwrite:", orderData);
+          await databases.createDocument(
+            appwriteDatabaseId,
+            "orders",
+            ID.unique(),
+            orderData
+          );
+          console.log("Order saved to Appwrite successfully with orderId:", orderId);
+        } catch (appwriteError: any) {
+          // Log error but don't fail the payment - transaction is already on blockchain
+          console.error("Failed to save order to Appwrite (non-critical):", appwriteError);
+          console.error("Error details:", {
+            code: appwriteError.code,
+            message: appwriteError.message,
+            type: appwriteError.type,
+          });
+          // Payment is still successful since blockchain transaction completed
+        }
+      } else {
+        console.warn("Appwrite Database not available or user not authenticated - skipping order save", {
+          databases: !!databases,
+          user: !!user,
         });
       }
 
-      toast.success("Payment successful! Funds locked in escrow until delivery.");
+      // Payment is successful - return success even if Appwrite save failed
+      // The transaction is confirmed on blockchain, which is what matters
       return {
         success: true,
         orderId,
@@ -393,18 +497,26 @@ export const usePayment = () => {
     }
   };
 
-  // Helper to get farmer's wallet address from Firestore
+  // Helper to get farmer's wallet address from Appwrite
   const getFarmerWalletAddress = async (farmerId: string): Promise<string> => {
-    if (!db) return ADMIN_WALLET_ADDRESS;
+    if (!databases) return ADMIN_WALLET_ADDRESS;
     
     try {
-      const farmerDoc = await getDoc(doc(db, "users", farmerId));
-      if (farmerDoc.exists()) {
-        const data = farmerDoc.data();
-        return data.walletAddress || ADMIN_WALLET_ADDRESS;
+      // Try to get user document from Appwrite users collection
+      // Note: You may need to adjust this based on your Appwrite users collection structure
+      const userDoc = await databases.getDocument(
+        appwriteDatabaseId,
+        "users",
+        farmerId
+      );
+      if (userDoc && userDoc.walletAddress) {
+        return userDoc.walletAddress;
       }
-    } catch (error) {
-      console.error("Failed to fetch farmer wallet:", error);
+    } catch (error: any) {
+      // If document doesn't exist or other error, use admin wallet
+      if (error.code !== 404) {
+        console.error("Failed to fetch farmer wallet from Appwrite:", error);
+      }
     }
     
     return ADMIN_WALLET_ADDRESS;

@@ -1,6 +1,6 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, onSnapshot } from "firebase/firestore";
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/lib/firebase";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,7 +16,6 @@ type ApplicationStatus = "not_submitted" | "pending" | "approved" | "rejected";
 
 interface FarmerApplicationForm {
   farmName: string;
-  registrationNumber: string;
   yearsOfExperience: string;
   farmAddress: string;
   farmSize: string;
@@ -34,7 +33,6 @@ interface FarmerApplication extends FarmerApplicationForm {
 
 const defaultForm: FarmerApplicationForm = {
   farmName: "",
-  registrationNumber: "",
   yearsOfExperience: "",
   farmAddress: "",
   farmSize: "",
@@ -50,28 +48,34 @@ const FarmerVerification = () => {
   const [status, setStatus] = useState<ApplicationStatus>("not_submitted");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const previousStatusRef = useRef<ApplicationStatus>("not_submitted");
 
   useEffect(() => {
-    const loadApplication = async () => {
-      if (!user) {
-        navigate("/login", { replace: true });
-        return;
-      }
+    if (!user) {
+      navigate("/login", { replace: true });
+      return;
+    }
 
-      if (!db) {
-        toast.error("Firebase is not configured. Unable to load verification data.");
-        setIsLoading(false);
-        return;
-      }
+    if (!db) {
+      toast.error("Firebase is not configured. Unable to load verification data.");
+      setIsLoading(false);
+      return;
+    }
 
-      try {
-        const applicationRef = doc(db, "farmerApplications", user.uid);
-        const snapshot = await getDoc(applicationRef);
+    // Prevent redirects when user is intentionally viewing the page
+    let redirectTimeout: NodeJS.Timeout | null = null;
+    let hasRedirected = false;
+
+    // Set up real-time listener for application status changes
+    const applicationRef = doc(db, "farmerApplications", user.uid);
+    
+    const unsubscribe = onSnapshot(
+      applicationRef,
+      (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data() as FarmerApplication;
           setForm({
             farmName: data.farmName ?? "",
-            registrationNumber: data.registrationNumber ?? "",
             yearsOfExperience: data.yearsOfExperience ?? "",
             farmAddress: data.farmAddress ?? "",
             farmSize: data.farmSize ?? "",
@@ -79,19 +83,90 @@ const FarmerVerification = () => {
             certificationLinks: data.certificationLinks ?? "",
             additionalNotes: data.additionalNotes ?? "",
           });
-          setStatus(data.status ?? "pending");
+          const applicationStatus = data.status ?? "pending";
+          const previousStatus = previousStatusRef.current;
+          previousStatusRef.current = applicationStatus;
+          setStatus(applicationStatus);
+          
+          // If status is approved, redirect to dashboard
+          if (applicationStatus === "approved" && !hasRedirected) {
+            // Clear any existing timeout
+            if (redirectTimeout) {
+              clearTimeout(redirectTimeout);
+            }
+            
+            // Only redirect if we're on the verification page
+            if (window.location.pathname === "/farmer/verification") {
+              hasRedirected = true;
+              
+              // If status just changed to approved, show success message
+              if (previousStatus !== "approved") {
+                toast.success("Your verification has been approved! Redirecting to dashboard...");
+              }
+              
+              redirectTimeout = setTimeout(() => {
+                navigate("/admin", { replace: true });
+              }, previousStatus !== "approved" ? 3000 : 1000); // Longer delay if just approved, shorter if already approved
+            }
+          }
+          
+          // If status is pending or rejected, ensure we don't redirect
+          if (applicationStatus === "pending" || applicationStatus === "rejected") {
+            if (redirectTimeout) {
+              clearTimeout(redirectTimeout);
+              redirectTimeout = null;
+            }
+            hasRedirected = false; // Reset so they can be redirected if approved later
+          }
         } else {
-          setStatus((verificationStatus as ApplicationStatus) ?? "not_submitted");
+          const currentStatus = (verificationStatus as ApplicationStatus) ?? "not_submitted";
+          const previousStatus = previousStatusRef.current;
+          previousStatusRef.current = currentStatus;
+          setStatus(currentStatus);
+          
+          // If status is approved from AuthContext, redirect (fallback case if Firestore doc doesn't exist)
+          if (currentStatus === "approved" && !hasRedirected) {
+            if (redirectTimeout) {
+              clearTimeout(redirectTimeout);
+            }
+            
+            if (window.location.pathname === "/farmer/verification") {
+              hasRedirected = true;
+              
+              if (previousStatus !== "approved") {
+                toast.success("Your verification has been approved! Redirecting to dashboard...");
+              }
+              
+              redirectTimeout = setTimeout(() => {
+                navigate("/admin", { replace: true });
+              }, previousStatus !== "approved" ? 3000 : 1000);
+            }
+          }
+          
+          // If status is pending or rejected, ensure we don't redirect
+          if (currentStatus === "pending" || currentStatus === "rejected") {
+            if (redirectTimeout) {
+              clearTimeout(redirectTimeout);
+              redirectTimeout = null;
+            }
+            hasRedirected = false;
+          }
         }
-      } catch (error) {
+        setIsLoading(false);
+      },
+      (error) => {
         console.error("Failed to load farmer application", error);
         toast.error("Failed to load application details. Please try again.");
-      } finally {
         setIsLoading(false);
       }
-    };
+    );
 
-    loadApplication();
+    return () => {
+      unsubscribe();
+      if (redirectTimeout) {
+        clearTimeout(redirectTimeout);
+      }
+    };
   }, [user, verificationStatus, navigate]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -102,7 +177,7 @@ const FarmerVerification = () => {
       return;
     }
 
-    if (!form.farmName || !form.registrationNumber || !form.farmAddress || !form.governmentId) {
+    if (!form.farmName || !form.farmAddress || !form.governmentId) {
       toast.error("Please complete all required fields marked with *");
       return;
     }
@@ -149,7 +224,10 @@ const FarmerVerification = () => {
             console.warn("External DB webhook failed (continuing):", err);
           }).finally(() => clearTimeout(timeout));
         } else {
-          console.warn("VITE_EXTERNAL_APPLICATION_WEBHOOK not set - skipping external DB sync");
+          // Only log in development mode - this is expected behavior when webhook is not configured
+          if (import.meta.env.DEV) {
+            console.info("VITE_EXTERNAL_APPLICATION_WEBHOOK not set - skipping external DB sync (this is optional)");
+          }
         }
       } catch (webhookError) {
         console.warn("External DB sync error (ignored):", webhookError);
@@ -229,8 +307,100 @@ const FarmerVerification = () => {
               </div>
             </div>
 
-            {isLoading ? (
+            {status === "approved" ? (
+              <div className="text-center py-10 space-y-4">
+                <CheckCircle2 className="h-16 w-16 text-green-500 mx-auto" />
+                <h3 className="text-xl font-semibold">Verification Approved!</h3>
+                <p className="text-muted-foreground">
+                  Your farm has been verified. You can now access the farmer dashboard.
+                </p>
+                <Button onClick={() => navigate("/admin", { replace: true })} size="lg">
+                  Go to Dashboard
+                </Button>
+              </div>
+            ) : isLoading ? (
               <div className="text-center py-10 text-muted-foreground">Loading verification details...</div>
+            ) : status === "pending" ? (
+              <div className="space-y-5">
+                <div className="rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 p-4">
+                  <p className="text-sm text-blue-800 dark:text-blue-200">
+                    Your application has been submitted and is under review. You can view your submitted details below, but cannot make changes until the review is complete.
+                  </p>
+                </div>
+                <div className="space-y-5">
+                  <div className="grid gap-2">
+                    <Label htmlFor="farmName">Farm name</Label>
+                    <Input
+                      id="farmName"
+                      value={form.farmName}
+                      disabled
+                      className="bg-muted"
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="farmAddress">Farm address</Label>
+                    <textarea
+                      id="farmAddress"
+                      rows={3}
+                      className="flex min-h-[80px] w-full rounded-md border border-input bg-muted px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                      value={form.farmAddress}
+                      disabled
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="farmSize">Farm size / herd count</Label>
+                    <Input
+                      id="farmSize"
+                      value={form.farmSize || "—"}
+                      disabled
+                      className="bg-muted"
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="yearsOfExperience">Years of dairy experience</Label>
+                    <Input
+                      id="yearsOfExperience"
+                      value={form.yearsOfExperience || "—"}
+                      disabled
+                      className="bg-muted"
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="governmentId">Government-issued ID number</Label>
+                    <Input
+                      id="governmentId"
+                      value={form.governmentId}
+                      disabled
+                      className="bg-muted"
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="certificationLinks">Proof of certification / document links</Label>
+                    <Input
+                      id="certificationLinks"
+                      value={form.certificationLinks || "—"}
+                      disabled
+                      className="bg-muted"
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="additionalNotes">Additional notes</Label>
+                    <textarea
+                      id="additionalNotes"
+                      rows={4}
+                      className="flex min-h-[100px] w-full rounded-md border border-input bg-muted px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                      value={form.additionalNotes || "—"}
+                      disabled
+                    />
+                  </div>
+                </div>
+              </div>
             ) : (
               <form className="space-y-5" onSubmit={handleSubmit}>
                 <div className="grid gap-2">
@@ -242,19 +412,6 @@ const FarmerVerification = () => {
                     placeholder="Green Valley Dairy"
                     value={form.farmName}
                     onChange={(event) => setForm((prev) => ({ ...prev, farmName: event.target.value }))}
-                    required
-                  />
-                </div>
-
-                <div className="grid gap-2">
-                  <Label htmlFor="registrationNumber">
-                    Cooperative / registration number <span className="text-destructive">*</span>
-                  </Label>
-                  <Input
-                    id="registrationNumber"
-                    placeholder="Registration ID / cooperative code"
-                    value={form.registrationNumber}
-                    onChange={(event) => setForm((prev) => ({ ...prev, registrationNumber: event.target.value }))}
                     required
                   />
                 </div>

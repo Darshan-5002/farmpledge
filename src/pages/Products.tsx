@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import Navigation from "@/components/Navigation";
 import { useAuth } from "@/contexts/AuthContext";
+import { useCart } from "@/contexts/CartContext";
 import { toast } from "sonner";
 import { 
   Search, 
@@ -40,6 +41,7 @@ interface Product {
 const Products = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { addToCart } = useCart();
   const [searchQuery, setSearchQuery] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -48,6 +50,9 @@ const Products = () => {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxImages, setLightboxImages] = useState<string[]>([]);
   const [lightboxCurrentIndex, setLightboxCurrentIndex] = useState(0);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const suggestionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!db) {
@@ -87,7 +92,11 @@ const Products = () => {
             setIsLoading(false);
           },
           (err: any) => {
-            console.warn("Primary products query failed, falling back:", err?.code || err);
+            // Firestore composite index may not exist - fallback works fine
+            // Only log in development mode to reduce console noise
+            if (import.meta.env.DEV) {
+              console.info("Using fallback query (composite index not required):", err?.code || "index missing");
+            }
             // Fallback: subscribe to the whole collection and filter client-side
             try {
               cleanup = onSnapshot(
@@ -140,15 +149,144 @@ const Products = () => {
     };
   }, []);
 
+  // Generate search suggestions based on products
+  useEffect(() => {
+    if (!searchQuery.trim() || products.length === 0) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    const query = searchQuery.toLowerCase().trim();
+    const queryWords = query.split(/\s+/).filter(w => w.length > 0);
+    
+    // Collect suggestions with priority scores
+    const suggestionMap = new Map<string, number>();
+    
+    // Filter out own products for farmers
+    const availableProducts = products.filter(
+      (product) => !user || product.ownerId !== user.uid
+    );
+    
+    availableProducts.forEach((product) => {
+      const name = product.name.toLowerCase();
+      const category = product.category.toLowerCase();
+      const description = product.description.toLowerCase();
+      
+      // Priority 1: Exact product name match (highest priority)
+      if (name.startsWith(query)) {
+        suggestionMap.set(product.name, (suggestionMap.get(product.name) || 0) + 100);
+      }
+      // Priority 2: Product name contains query
+      else if (name.includes(query)) {
+        suggestionMap.set(product.name, (suggestionMap.get(product.name) || 0) + 50);
+      }
+      // Priority 3: Product name words start with query
+      else {
+        const nameWords = name.split(/\s+/);
+        nameWords.forEach((word) => {
+          if (word.startsWith(query) && word.length >= query.length) {
+            suggestionMap.set(product.name, (suggestionMap.get(product.name) || 0) + 30);
+          }
+        });
+      }
+      
+      // Category matches
+      if (category.startsWith(query)) {
+        suggestionMap.set(product.category, (suggestionMap.get(product.category) || 0) + 40);
+      } else if (category.includes(query)) {
+        suggestionMap.set(product.category, (suggestionMap.get(product.category) || 0) + 20);
+      }
+      
+      // Description keywords
+      const descWords = description.split(/\s+/);
+      descWords.forEach((word) => {
+        if (word.startsWith(query) && word.length >= 3) {
+          const capitalized = word.charAt(0).toUpperCase() + word.slice(1);
+          if (capitalized.length >= 3) {
+            suggestionMap.set(capitalized, (suggestionMap.get(capitalized) || 0) + 10);
+          }
+        }
+      });
+    });
+    
+    // Add common product-related keywords
+    const commonKeywords = [
+      // Dairy products
+      "milk", "butter", "cheese", "yogurt", "organic", "fresh", "dairy", "farm", "cream", "ghee",
+      "curd", "paneer", "cottage cheese", "mozzarella", "cheddar", "buttermilk", "lassi", 
+      "kefir", "sour cream", "whipped cream", "heavy cream", "light cream", "half and half",
+      "ice cream", "gelato", "frozen yogurt", "sherbet", "milk powder", "condensed milk",
+      "evaporated milk", "skim milk", "whole milk", "low fat milk", "full cream milk",
+      "goat milk", "buffalo milk", "cow milk", "almond milk", "soy milk", "coconut milk",
+      "cream cheese", "ricotta", "feta", "parmesan", "swiss cheese", "provolone",
+      "mascarpone", "brie", "camembert", "blue cheese", "goat cheese", "sheep cheese",
+      "clarified butter", "cultured butter", "salted butter", "unsalted butter",
+      "dairy products", "dairy items", "fresh dairy", "organic dairy",
+      // Vegetables
+      "vegetables", "vegetable", "tomato", "potato", "onion", "carrot", "cabbage", "cauliflower", 
+      "broccoli", "spinach", "lettuce", "cucumber", "pepper", "beans", "peas", "corn",
+      // Fruits
+      "fruits", "fruit", "apple", "banana", "orange", "mango", "grapes", "berries"
+    ];
+    commonKeywords.forEach((keyword) => {
+      if (keyword.startsWith(query)) {
+        // Capitalize each word in multi-word keywords
+        const capitalized = keyword
+          .split(' ')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ');
+        suggestionMap.set(capitalized, (suggestionMap.get(capitalized) || 0) + 25);
+      } else if (keyword.includes(query)) {
+        // Capitalize each word in multi-word keywords
+        const capitalized = keyword
+          .split(' ')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ');
+        suggestionMap.set(capitalized, (suggestionMap.get(capitalized) || 0) + 15);
+      }
+    });
+    
+    // Sort by priority and limit to 5 suggestions
+    const suggestionArray = Array.from(suggestionMap.entries())
+      .sort((a, b) => b[1] - a[1]) // Sort by priority (descending)
+      .slice(0, 5)
+      .map(([suggestion]) => suggestion);
+    
+    setSuggestions(suggestionArray);
+    setShowSuggestions(suggestionArray.length > 0);
+  }, [searchQuery, products, user]);
+
   const filteredProducts = useMemo(
     () =>
       products.filter(
-        (product) =>
+        (product) => {
+          // Filter by search query
+          const matchesSearch =
           product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          product.description.toLowerCase().includes(searchQuery.toLowerCase()),
+            product.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            product.category.toLowerCase().includes(searchQuery.toLowerCase());
+          
+          // Exclude products listed by the current farmer (if logged in as farmer)
+          const isOwnProduct = user && product.ownerId === user.uid;
+          
+          return matchesSearch && !isOwnProduct;
+        }
       ),
-    [products, searchQuery],
+    [products, searchQuery, user],
   );
+  
+  const handleSuggestionClick = (suggestion: string) => {
+    setSearchQuery(suggestion);
+    setShowSuggestions(false);
+    // Focus back on input after selection
+    setTimeout(() => {
+      const input = document.querySelector('input[placeholder="Search products..."]') as HTMLInputElement;
+      if (input) {
+        input.focus();
+      }
+    }, 0);
+  };
 
   const handleBuyNow = (product: Product) => {
     // Check if user is logged in
@@ -163,9 +301,50 @@ const Products = () => {
       return;
     }
 
-    navigate("/checkout", {
-      state: { product },
+    console.log("Navigating to checkout with product:", {
+      id: product.id,
+      name: product.name,
+      ownerId: product.ownerId,
+      ownerName: product.ownerName,
     });
+    
+    navigate("/checkout", {
+      state: { 
+        product: {
+          ...product,
+          ownerId: product.ownerId ?? null,
+          ownerName: product.ownerName ?? null,
+        }
+      },
+    });
+  };
+
+  const handleAddToCart = (product: Product) => {
+    // Check if user is logged in
+    if (!user) {
+      toast.error("Please login to add products to cart", {
+        description: "You need to be logged in to add items to your cart.",
+        action: {
+          label: "Login",
+          onClick: () => navigate("/login"),
+        },
+      });
+      return;
+    }
+
+    addToCart({
+      id: product.id,
+      name: product.name,
+      price: product.price,
+      quantity: 1,
+      image: product.image,
+      images: product.images,
+      category: product.category,
+      ownerId: product.ownerId ?? null,
+      ownerName: product.ownerName ?? null,
+      inStock: product.inStock,
+    });
+    toast.success(`${product.name} added to cart`);
   };
 
   const handleImageNavigation = (productId: string, direction: "prev" | "next", images: string[]) => {
@@ -246,13 +425,56 @@ const Products = () => {
         {/* Search Bar */}
         <div className="mb-6 flex gap-4">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground z-10" />
             <Input
               placeholder="Search products..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setShowSuggestions(true);
+              }}
+              onFocus={() => {
+                if (suggestions.length > 0) {
+                  setShowSuggestions(true);
+                }
+              }}
+              onBlur={(e) => {
+                // Check if the blur is caused by clicking on a suggestion
+                const relatedTarget = e.relatedTarget as HTMLElement;
+                if (!suggestionRef.current?.contains(relatedTarget)) {
+                  // Delay hiding suggestions to allow click events
+                  setTimeout(() => setShowSuggestions(false), 200);
+                }
+              }}
               className="pl-10"
             />
+            
+            {/* Search Suggestions Dropdown */}
+            {showSuggestions && suggestions.length > 0 && (
+              <div 
+                ref={suggestionRef}
+                className="absolute z-50 w-full mt-1 bg-background border border-border rounded-md shadow-lg max-h-60 overflow-auto"
+                onMouseDown={(e) => {
+                  // Prevent input blur when clicking on suggestions
+                  e.preventDefault();
+                }}
+              >
+                {suggestions.map((suggestion, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      handleSuggestionClick(suggestion);
+                    }}
+                    className="w-full text-left px-4 py-2 hover:bg-accent hover:text-accent-foreground transition-colors cursor-pointer flex items-center gap-2"
+                  >
+                    <Search className="h-3 w-3 text-muted-foreground" />
+                    <span>{suggestion}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -366,10 +588,37 @@ const Products = () => {
                         </p>
                       </div>
                     </div>
+                    <div className="flex gap-2">
+                      <TooltipProvider>
+                        <Tooltip delayDuration={200}>
+                          <TooltipTrigger asChild>
+                            <span className="flex-1">
+                              <Button
+                                variant="outline"
+                                onClick={() => handleAddToCart({
+                                  ...product,
+                                  ownerId: product.ownerId ?? undefined,
+                                  ownerName: product.ownerName ?? undefined,
+                                })}
+                                className="w-full"
+                                disabled={!product.inStock}
+                              >
+                                <ShoppingCart className="mr-2 h-4 w-4" />
+                                Add to Cart
+                              </Button>
+                            </span>
+                          </TooltipTrigger>
+                          {!product.inStock && (
+                            <TooltipContent>
+                              <p>This product is out of stock</p>
+                            </TooltipContent>
+                          )}
+                        </Tooltip>
+                      </TooltipProvider>
                     <TooltipProvider>
                       <Tooltip delayDuration={200}>
                         <TooltipTrigger asChild>
-                          <span className="w-full inline-block">
+                            <span className="flex-1">
                             <Button
                               onClick={() => handleBuyNow({
                                 ...product,
@@ -382,11 +631,10 @@ const Products = () => {
                               {!user ? (
                                 <>
                                   <LogIn className="mr-2 h-4 w-4" />
-                                  Login to Buy
+                                    Login
                                 </>
                               ) : (
                                 <>
-                                  <ShoppingCart className="mr-2 h-4 w-4" />
                                   {product.inStock ? "Buy Now" : "Out of Stock"}
                                 </>
                               )}
@@ -400,6 +648,7 @@ const Products = () => {
                         )}
                       </Tooltip>
                     </TooltipProvider>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
