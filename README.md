@@ -19,9 +19,9 @@ A revolutionary e-commerce platform connecting dairy farmers directly with consu
 - **Tailwind CSS** for styling
 - **shadcn/ui** component library
 - **React Router** for navigation
-- **TanStack Query** for data fetching
 
-### Backend (Lovable Cloud / Supabase)
+
+### Backend
 - **Appwrite** database
 - **Authentication** (Email, Phone, Google)
 - **Storage** for product images
