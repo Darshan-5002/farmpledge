@@ -22,7 +22,7 @@ A revolutionary e-commerce platform connecting dairy farmers directly with consu
 - **TanStack Query** for data fetching
 
 ### Backend (Lovable Cloud / Supabase)
-- **PostgreSQL** database
+- **Appwrite** database
 - **Authentication** (Email, Phone, Google)
 - **Storage** for product images
 - **Edge Functions** for serverless logic
@@ -43,7 +43,6 @@ A revolutionary e-commerce platform connecting dairy farmers directly with consu
 
 - Node.js 18 or higher
 - npm or bun package manager
-- Supabase account (or use Lovable Cloud)
 - MetaMask wallet for blockchain features
 
 ## 🔧 Local Development Setup
